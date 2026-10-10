@@ -14,6 +14,19 @@
     <script src="/havcs/js/vue-resource.min.js"></script>
     <script src="/havcs/js/vue-router.min.js"></script>
     <script src="/havcs/js/ha.js"></script>
+    <script>
+    // HA的iframe权限策略禁止注册unload事件（控制台Violation告警）：
+    // 在jQuery加载前包装addEventListener，将unload注册自动转为pagehide（Chrome推荐替代）
+    (function() {
+        var win = window;
+        var _add = win.addEventListener ? win.addEventListener.bind(win) : null;
+        if (_add) {
+            win.addEventListener = function(type, listener, options) {
+                return _add(type === 'unload' ? 'pagehide' : type, listener, options);
+            };
+        }
+    })();
+    </script>
     <script src="/havcs/js/jquery.min.js"></script>
     <script src="/havcs/js/jquery-weui.min.js"></script>
 	<script src="/havcs/js/highlight.pack.js"></script>
@@ -210,13 +223,16 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        /* 设备方块右上角电源开关按钮 */
-        .grid-power {
-            position: absolute;
-            top: 0;
-            right: 0;
-            padding: 6px;
-            z-index: 2;
+        /* 点击设备图标开关设备，点击其余空白区域编辑设备 */
+        .weui-grid__icon {
+            cursor: pointer;
+            -webkit-tap-highlight-color: rgba(0, 0, 0, .1);
+        }
+        .weui-grid__icon i {
+            transition: transform .1s;
+        }
+        .weui-grid__icon:active i {
+            transform: scale(.85);
         }
     </style>
 </head>
@@ -255,13 +271,10 @@
         <div class="weui-grids">
             <template v-for="(item, index) in deviceList">
             <a href="javascript:;" :key="item.device_id" class="weui-grid js_grid" @click="addOrEdit(item.device_id)" >
-                <div class="weui-grid__icon">
+                <div class="weui-grid__icon" onclick="event.stopPropagation();window.havcsTogglePower(this)" v-bind:data-entities="JSON.stringify(item.entity_id)" v-bind:data-power="item.power" :title="'on'==item.power?'点击关闭':'点击打开'">
                     <i class= "mdi mdi-48px" v-bind:class="item.icon" v-bind:style="{color: item.power == 'on' ? '#66ccff' : '#9a9a9a'}"></i>
                 </div>
                 <p class="weui-grid__label">{{ item.zone?item.name+"&nbsp（"+item.zone+"）" : item.name }}</p>
-                <span class="grid-power" onclick="event.stopPropagation();window.havcsTogglePower(this)" v-bind:data-entities="JSON.stringify(item.entity_id)" v-bind:data-power="item.power" :title="'on'==item.power?'关闭':'打开'">
-                    <i class="mdi mdi-24px" v-bind:class="item.power == 'on' ? 'mdi-power' : 'mdi-power-off'" v-bind:style="{color: item.power == 'on' ? '#09bb07' : '#9a9a9a'}"></i>
-                </span>
             </a>
             </template>
 
@@ -458,6 +471,81 @@
         </div>
     </div>
 </template>
+<script>
+// 新建设备的默认值修正：旧版main.min.js内置aligenie/dueros/jdwhale等多平台默认值且类型为空，
+// 在组件创建前统一改为：平台仅dueros、类型默认switch开关（图标按类型联动，同"同步设置图标"勾选行为）
+// （自包含，不依赖main.min.js构建版本；图标值对应const.py中DEVICE_TYPE_DICT['switch']['icon']）
+(function() {
+    if (!window.Vue) { return; }
+    var fixDeviceDefaults = function(d) {
+        if (!d || !d.device) { return d; }
+        if (Array.isArray(d.device.visable)) {
+            d.device.visable = ['dueros'];
+        }
+        if (!d.device.type) {
+            d.device.type = 'switch';
+        }
+        if (!d.device.icon) {
+            d.device.icon = 'mdi-toggle-switch';
+        }
+        return d;
+    };
+    var _extend = Vue.extend;
+    Vue.extend = function(opts) {
+        if (opts && opts.template === '#deviceEditTemplate') {
+            if (typeof opts.data === 'function') {
+                var origData = opts.data;
+                opts.data = function() {
+                    return fixDeviceDefaults(origData.apply(this, arguments));
+                };
+            } else if (opts.data) {
+                fixDeviceDefaults(opts.data);
+            }
+            // weui选择器弹层挂在body上不随组件销毁：返回/保存离开页面时主动关闭，避免弹层残留。
+            // 必须先按组件方式close每个select实例（复位_open标记），否则裸$.closePicker只关DOM不留回调，
+            // 注册表里残留_open=true的脏实例，会导致再次进入页面后平台选择器永远打不开。
+            var origBeforeDestroy = opts.beforeDestroy;
+            opts.beforeDestroy = function() {
+                if (window.jQuery) {
+                    $(this.$el).find('input').each(function() {
+                        var inst = $(this).data('weui-select');
+                        if (inst) {
+                            try { inst.close(); } catch (e) {}
+                            inst._open = false;
+                        }
+                    });
+                    if (typeof $.closePicker === 'function') {
+                        try { $.closePicker(); } catch (e) {}
+                    }
+                }
+                if (typeof origBeforeDestroy === 'function') {
+                    origBeforeDestroy.call(this);
+                } else if (Array.isArray(origBeforeDestroy)) {
+                    for (var i = 0; i < origBeforeDestroy.length; i++) {
+                        if (typeof origBeforeDestroy[i] === 'function') { origBeforeDestroy[i].call(this); }
+                    }
+                }
+            };
+        }
+        return _extend.apply(Vue, arguments);
+    };
+})();
+</script>
+<script>
+// ljr.im中转服务已停止：拦截发往ljr.im的所有vue-resource请求并返回空结果，
+// 避免面板每次加载都触发DNS解析失败的报错（getNotice公告接口等）
+(function() {
+    if (!window.Vue || !Vue.http) { return; }
+    var _post = Vue.http.post;
+    if (typeof _post !== 'function') { return; }
+    Vue.http.post = function(url) {
+        if (typeof url === 'string' && url.indexOf('ljr.im') >= 0) {
+            return Promise.resolve({ data: { code: '', data: null } });
+        }
+        return _post.apply(Vue.http, arguments);
+    };
+})();
+</script>
 <script src="js/main.min.js"></script>
 <script>
 // 定时刷新设备状态：仅重新拉取数据，Vue按设备ID复用节点局部更新，无闪烁
@@ -467,7 +555,7 @@ setInterval(function() {
     }
 }, 20000);
 
-// 设备方块电源按钮：调用HA原生服务开关设备（独立于main.min.js，任何构建可用）
+// 点击设备图标开关设备：调用HA原生服务（独立于main.min.js，任何构建可用）
 window.havcsTogglePower = function(el) {
     var entities;
     try { entities = JSON.parse(el.dataset.entities || '[]'); } catch (e) { entities = []; }

@@ -5,30 +5,20 @@ recommended version HA version: 0.114.4
 """
 
 import asyncio
-import async_timeout
-import aiohttp
 from datetime import datetime, timedelta
 import importlib
-from base64 import b64encode
-import binascii
-from hashlib import sha1
 import voluptuous as vol
 import os
-import ssl
-import json
-import requests.certs
 import shutil
 import logging
 import traceback
 
 from homeassistant import config_entries
-from homeassistant.core import Event, Context, callback, HomeAssistant
+from homeassistant.core import Event, Context, HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.components import mqtt
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.const import (CONF_PORT, CONF_PROTOCOL, EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP, EVENT_STATE_CHANGED, ATTR_ENTITY_ID)
+from homeassistant.const import (CONF_PORT, CONF_PROTOCOL, EVENT_HOMEASSISTANT_START)
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.network import get_url
 from homeassistant import config as conf_util
 from homeassistant.components.http import StaticPathConfig
@@ -39,7 +29,7 @@ from homeassistant.components import frontend
 from . import util as havcs_util
 from .bind import HavcsBindManager
 from .http import HavcsHttpManager
-from .const import INTEGRATION, CONF_SETTINGS_CONFIG_PATH, CONF_DEVICE_CONFIG_PATH, DEVICE_ATTRIBUTE_DICT, DATA_HAVCS_HANDLER, DATA_HAVCS_CONFIG, DATA_HAVCS_MQTT, DATA_HAVCS_BIND_MANAGER, DATA_HAVCS_HTTP_MANAGER, DATA_HAVCS_SETTINGS, DATA_HAVCS_ITEMS, DEVICE_PLATFORM_DICT, HAVCS_SERVICE_URL, ATTR_DEVICE_VISABLE, ATTR_DEVICE_ENTITY_ID, ATTR_DEVICE_TYPE, ATTR_DEVICE_NAME, ATTR_DEVICE_ZONE, ATTR_DEVICE_ICON, ATTR_DEVICE_ATTRIBUTES, ATTR_DEVICE_ACTIONS, DEVICE_TYPE_DICT, DEVICE_ATTRIBUTE_DICT, DEVICE_ACTION_DICT, DEVICE_PLATFORM_DICT
+from .const import INTEGRATION, CONF_SETTINGS_CONFIG_PATH, CONF_DEVICE_CONFIG_PATH, DEVICE_ATTRIBUTE_DICT, DATA_HAVCS_HANDLER, DATA_HAVCS_CONFIG, DATA_HAVCS_BIND_MANAGER, DATA_HAVCS_HTTP_MANAGER, DATA_HAVCS_SETTINGS, DATA_HAVCS_ITEMS, DEVICE_PLATFORM_DICT, ATTR_DEVICE_VISABLE, ATTR_DEVICE_ENTITY_ID, ATTR_DEVICE_TYPE, ATTR_DEVICE_NAME, ATTR_DEVICE_ZONE, ATTR_DEVICE_ICON, ATTR_DEVICE_ATTRIBUTES, ATTR_DEVICE_ACTIONS, DEVICE_TYPE_DICT, DEVICE_ATTRIBUTE_DICT, DEVICE_ACTION_DICT, DEVICE_PLATFORM_DICT
 
 _LOGGER = logging.getLogger(__name__)
 # _LOGGER.setLevel(logging.DEBUG)
@@ -290,21 +280,9 @@ async def async_setup_entry(hass, config_entry):
 
         MODE.append('http')
     if CONF_HTTP_PROXY in conf:
-        if conf.get(CONF_HTTP_PROXY) is None:
-            conf[CONF_HTTP_PROXY] = HTTP_PROXY({})
-        _LOGGER.info("[init] havcs enable \"http_proxy mode\"")
-        if CONF_SETTING not in conf:
-            _LOGGER.error("[init] fail to start havcs: http_proxy mode require mqtt congfiguration")
-            return False
-        MODE.append('http_proxy')
+        _LOGGER.warning("[init] http_proxy模式依赖的ljr.im中转服务已停止，忽略该配置，仅按http直连模式运行")
     if CONF_SKILL in conf:
-        if conf.get(CONF_SKILL) is None:
-            conf[CONF_SKILL] = SKILL_SCHEMA({})
-        _LOGGER.info("[init] havcs enable \"skill mode\"")
-        if CONF_SETTING not in conf:
-            _LOGGER.error("[init] fail to start havcs: skill mode require mqtt congfiguration")
-            return False
-        MODE.append('skill')
+        _LOGGER.warning("[init] skill模式依赖的ljr.im中转服务已停止，忽略该配置，仅按http直连模式运行")
     
     havcs_util.ENTITY_KEY = conf.get(CONF_SETTING, {}).get(CONF_ENTITY_KEY)
     havcs_util.CONTEXT_HAVCS = Context(conf.get(CONF_SETTING, {}).get(CONF_USER_ID))
@@ -336,257 +314,13 @@ async def async_setup_entry(hass, config_entry):
     http_manager.register_settings_manager()
     hass.data[DOMAIN][CONF_SETTINGS_CONFIG_PATH] = havc_settings_config_path
 
-    sync_device = conf.get(CONF_SKILL, {}).get(CONF_SYNC_DEVICE)
-    bind_device = conf.get(CONF_SKILL, {}).get(CONF_BIND_DEVICE)
-
-    if CONF_HTTP_PROXY not in conf and CONF_SKILL not in conf:
-        _LOGGER.debug("[init] havcs only run in http mode, skip mqtt initialization")
-        ha_url = conf.get(CONF_HTTP, {}).get(CONF_HA_URL, get_url(hass))
-        _LOGGER.debug("[init] ha_url = %s, base_url = %s", ha_url, get_url(hass))
-        # 直连模式：创建绑定管理器，启用状态变化主动上报（百度官方 changereport 接口）
-        clients = conf.get(CONF_HTTP, {}).get(CONF_CLIENTS, {})
-        if platforms and clients:
-            bind_manager = hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER] = HavcsBindManager(hass, platforms, bind_device=False, sync_device=True, app_key=None, decrypt_key=None, direct_report=True)
-            await bind_manager.async_init()
-    else:
-        setting_conf = conf.get(CONF_SETTING)
-        app_key = setting_conf.get(CONF_APP_KEY)
-        app_secret = setting_conf.get(CONF_APP_SECRET)
-        decrypt_key =bytes().fromhex(sha1(app_secret.encode("utf-8")).hexdigest())[0:16]
-
-        if platforms:
-            bind_manager = hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER] = HavcsBindManager(hass, platforms, bind_device, sync_device, app_key, decrypt_key)
-            await bind_manager.async_init()
-
-        allowed_uri = conf.get(CONF_HTTP_PROXY, {}).get(CONF_ALLOWED_URI)
-        ha_url = conf.get(CONF_HTTP_PROXY, {}).get(CONF_HA_URL, get_url(hass))
-
-        # 组装mqtt配置
-        mqtt_conf = {}
-        for (k,v) in  setting_conf.items():
-            if(k == CONF_APP_KEY):
-                mqtt_conf.setdefault('username', v)
-            elif(k == CONF_APP_SECRET):
-                mqtt_conf.setdefault('password', v)
-            elif(k == CONF_ENTITY_KEY):
-                continue
-            else:
-                mqtt_conf.setdefault(k, v)
-        certificate = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ca.crt')
-        if os.path.exists(certificate):
-            mqtt_conf[CONF_CERTIFICATE] = certificate
-            _LOGGER.debug("[init] sucess to autoload ca.crt from %s", certificate)
-        
-        validate_mqtt_conf = mqtt.CONFIG_SCHEMA({'mqtt': mqtt_conf})['mqtt']
-        hass.data[DOMAIN][DATA_HAVCS_MQTT] = mqtt.MQTT(
-            hass,
-            config_entry,
-            mqtt_conf
-        )
-        _LOGGER.debug("[init] connecting to mqtt server")
-        
-        await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_connect()  # 没有返回值
-
-        retry = 5
-        _LOGGER.debug("[init] wait for mqtt client connection status")
-        while retry > 0 :
-            await asyncio.sleep(5)
-            if hass.data[DOMAIN][DATA_HAVCS_MQTT].connected:
-                _LOGGER.debug("[init] mqtt client connected")
-                break
-            retry -= 1
-            _LOGGER.debug("[init] mqtt client not connected yet, check after 5s")
-  
-        if hass.data[DOMAIN][DATA_HAVCS_MQTT].connected:
-            pass
-        else:
-            import hashlib
-            md5_l = hashlib.md5()
-            with open(certificate,mode="rb") as f:
-                by = f.read()
-            md5_l.update(by)
-            local_ca_md5 = md5_l.hexdigest()
-            _LOGGER.debug("[init] local ca.crt md5 %s", local_ca_md5)
-            
-            try:
-                ca_url = 'https://raw.githubusercontent.com/cnk700i/havcs/master/custom_components/havcs/ca.crt'
-                session = async_get_clientsession(hass, verify_ssl=False)
-                async with async_timeout.timeout(5):
-                    response = await session.get(ca_url)
-                ca_bytes = await response.read()
-                md5_l = hashlib.md5()
-                md5_l.update(ca_bytes)
-                latest_ca_md5 = md5_l.hexdigest()
-                _LOGGER.debug("[init] remote ca.crt md5 %s", latest_ca_md5)
-                if local_ca_md5 != latest_ca_md5:
-                    _LOGGER.error("[init] can not connect to mqtt server(host = %s, port = %s), try update ca.crt file ",setting_conf[CONF_BROKER], setting_conf[CONF_PORT])
-                else:
-                    _LOGGER.error("[init] can not connect to mqtt server(host = %s, port = %s), check mqtt server's address and port ", setting_conf[CONF_BROKER], setting_conf[CONF_PORT])
-            except Exception as e:
-                _LOGGER.error("[init] fail to check whether ca.crt is latest, cause by %s", repr(e))
-            _LOGGER.error("[init] fail to init havcs")
-            await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_disconnect()
-            return False
-
-        async def async_stop_mqtt(event: Event):
-            """Stop MQTT component."""
-            await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_disconnect()
-
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, async_stop_mqtt)
-
-        async def async_http_proxy_handler(mqtt_msg, topic, start_time = None):
-            response = None
-            url = ha_url + mqtt_msg['uri']
-            _LOGGER.debug("[http_proxy] request: url = %s", url)
-            if('content' in mqtt_msg):
-                _LOGGER.debug("[http_proxy] use POST method")
-                platform = mqtt_msg.get('platform', havcs_util.get_platform_from_command(mqtt_msg['content']))
-                auth_type, auth_value = mqtt_msg.get('headers', {}).get('Authorization',' ').split(' ', 1)
-                _LOGGER.debug("[http_proxy] platform = %s, auth_type = %s, access_token = %s", platform, auth_type, auth_value)
-
-                try:
-                    session = async_get_clientsession(hass, verify_ssl=False)
-                    async with async_timeout.timeout(5):
-                        response = await session.post(url, data=mqtt_msg['content'], headers = mqtt_msg.get('headers'))
-                except(asyncio.TimeoutError, aiohttp.ClientError):
-                    _LOGGER.error("[http_proxy] fail to access %s in local network: timeout", url)
-                except:
-                    _LOGGER.error("[http_proxy] fail to access %s in local network: %s", url, traceback.format_exc())
-            else:
-                _LOGGER.debug("[http_proxy] use GET method")
-                try:
-                    session = async_get_clientsession(hass, verify_ssl=False)
-                    async with async_timeout.timeout(5):
-                        response = await session.get(url, headers = mqtt_msg.get('headers'))
-                except(asyncio.TimeoutError, aiohttp.ClientError):
-                    _LOGGER.error("[http_proxy] fail to access %s in local network: timeout", url)
-                except:
-                    _LOGGER.error("[http_proxy] fail to access %s in local network: %s", url, traceback.format_exc())
-                # _LOGGER.debug("[http_proxy] %s", response.history) #查看重定向信息
-            if response is not None:
-                if response.status != 200:
-                    _LOGGER.error("[http_proxy] fail to access %s in local network: status=%d",url,response.status)
-                if('image' in response.headers['Content-Type'] or 'stream' in response.headers['Content-Type']):
-                    result = await response.read()
-                    result = b64encode(result).decode()
-                else:
-                    result = await response.text()
-                headers = {
-                    'Content-Type': response.headers['Content-Type'] + ';charset=utf-8'
-                }
-                res = {
-                    'headers': headers,
-                    'status': response.status,
-                    'content': result.encode('utf-8').decode('unicode_escape'),
-                    'msgId': mqtt_msg.get('msgId')
-                }
-                _LOGGER.debug("[http_proxy] response: uri = %s, msgid = %s, type = %s", mqtt_msg['uri'].split('?')[0], mqtt_msg.get('msgId'), response.headers['Content-Type'])
-            else:
-                res = {
-                    'status': 500,
-                    'content': '{"error":"time_out"}',
-                    'msgId': mqtt_msg.get('msgId')
-                }
-                _LOGGER.debug("[http_proxy] response: uri = %s, msgid = %s", mqtt_msg['uri'].split('?')[0], mqtt_msg.get('msgId'))
-            res = havcs_util.AESCipher(decrypt_key).encrypt(json.dumps(res, ensure_ascii = False).encode('utf8'))
-
-            await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_publish(topic.replace('/request/','/response/'), res, 2, False)
-            end_time = datetime.now()
-            _LOGGER.debug("[mqtt] -------- mqtt task finish at %s, Running time: %ss --------", end_time.strftime('%Y-%m-%d %H:%M:%S'), (end_time - start_time).total_seconds())
-
-        async def async_module_handler(mqtt_msg, topic, start_time = None):
-            platform = mqtt_msg.get('platform', havcs_util.get_platform_from_command(mqtt_msg['content']))
-            if platform == 'unknown':
-                _LOGGER.error("[skill] receive command from unsupport platform \"%s\"", platform)
-                return
-            if platform not in hass.data[DOMAIN][DATA_HAVCS_HANDLER]:
-                _LOGGER.error("[skill] receive command from uninitialized platform \"%s\" , check up your configuration.yaml", platform)
-                return
-            try:
-                response = await hass.data[DOMAIN][DATA_HAVCS_HANDLER][platform].handleRequest(json.loads(mqtt_msg['content']), auth = True, request_from = "mqtt")
-            except:
-                response = '{"error":"service error"}'
-                _LOGGER.error("[skill] %s", traceback.format_exc())
-            res = {
-                    'headers': {'Content-Type': 'application/json;charset=utf-8'},
-                    'status': 200,
-                    'content': json.dumps(response).encode('utf-8').decode('unicode_escape'),
-                    'msgId': mqtt_msg.get('msgId')
-                }
-            res = havcs_util.AESCipher(decrypt_key).encrypt(json.dumps(res, ensure_ascii = False).encode('utf8'))
-
-            await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_publish(topic.replace('/request/','/response/'), res, 2, False)
-            end_time = datetime.now()
-            _LOGGER.debug("[mqtt] -------- mqtt task finish at %s, Running time: %ss --------", end_time.strftime('%Y-%m-%d %H:%M:%S'), (end_time - start_time).total_seconds())
-            
-        async def async_publish_error(mqtt_msg,topic):
-            res = {
-                    'headers': {'Content-Type': 'application/json;charset=utf-8'},
-                    'status': 404,
-                    'content': '',
-                    'msgId': mqtt_msg.get('msgId')
-                }                    
-            res = havcs_util.AESCipher(decrypt_key).encrypt(json.dumps(res, ensure_ascii = False).encode('utf8'))
-            await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_publish(topic.replace('/request/','/response/'), res, 2, False)
-
-        @callback
-        def message_received(*args): # 0.90 传参变化
-            if isinstance(args[0], str):
-                topic = args[0]
-                payload = args[1]
-                # qos = args[2]
-            else:
-                topic = args[0].topic
-                payload = args[0].payload
-                # qos = args[0].qos
-            """Handle new MQTT state messages."""
-            # _LOGGER.debug("[mqtt] get encrypt message: \n {}".format(payload))
-            try:
-                start_time = datetime.now()
-                end_time = None
-                _LOGGER.debug("[mqtt] -------- start handle task from mqtt at %s --------", start_time.strftime('%Y-%m-%d %H:%M:%S'))
-
-                payload = havcs_util.AESCipher(decrypt_key).decrypt(payload)
-                # _LOGGER.debug("[mqtt] get raw message: \n {}".format(payload))
-                req = json.loads(payload)
-                if req.get('msgType') == 'hello':
-                    _LOGGER.info("[mqtt] get hello message: %s", req.get('content'))
-                    end_time = datetime.now() 
-                    _LOGGER.debug("[mqtt] -------- mqtt task finish at %s, Running time: %ss --------", end_time.strftime('%Y-%m-%d %H:%M:%S'), (end_time - start_time).total_seconds())
-                    return
-                
-                _LOGGER.debug("[mqtt] raw message: %s", req)
-                if req.get('platform') == 'h2m2h':
-                    if('http_proxy' not in MODE):
-                        _LOGGER.info("[http_proxy] havcs not run in http_proxy mode, ignore request: %s", req)
-                        raise RuntimeError
-                    if(allowed_uri and req.get('uri','/').split('?')[0] not in allowed_uri):
-                        _LOGGER.info("[http_proxy] uri not allowed: %s", req.get('uri','/'))
-                        hass.add_job(async_publish_error(req, topic))
-                        raise RuntimeError
-                    hass.add_job(async_http_proxy_handler(req, topic, start_time))
-                else:
-                    if('skill' not in MODE):
-                        _LOGGER.info("[skill] havcs not run in skill mode, ignore request: %s", req)
-                        raise RuntimeError 
-                    hass.add_job(async_module_handler(req, topic, start_time))
-
-            except (json.decoder.JSONDecodeError, UnicodeDecodeError, binascii.Error):
-                import sys
-                ex_type, ex_val, ex_stack = sys.exc_info()
-                log = ''
-                for stack in traceback.extract_tb(ex_stack):
-                    log += str(stack)
-                _LOGGER.debug("[mqtt] fail to decrypt message, abandon[%s][%s]: %s", ex_type, ex_val, log)
-                end_time = datetime.now()
-            except:
-                _LOGGER.error("[mqtt] fail to handle %s", traceback.format_exc())
-                end_time = datetime.now()
-            if end_time:    
-                _LOGGER.debug("[mqtt] -------- mqtt task finish at %s, Running time: %ss --------", end_time.strftime('%Y-%m-%d %H:%M:%S'), (end_time - start_time).total_seconds())
-
-        await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_subscribe("ai-home/http2mqtt2hass/"+app_key+"/request/#", message_received, 2, 'utf-8')
-        _LOGGER.info("[init] mqtt initialization finished, waiting for welcome message of mqtt server.")
+    # ljr.im中转服务已停止：移除mqtt中转(http_proxy/skill模式)初始化，仅支持http直连模式
+    _LOGGER.debug("[init] havcs run in http direct mode")
+    # 直连模式：创建绑定管理器，启用状态变化主动上报（百度官方 changereport 接口）
+    clients = conf.get(CONF_HTTP, {}).get(CONF_CLIENTS, {})
+    if platforms and clients:
+        bind_manager = hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER] = HavcsBindManager(hass, platforms, bind_device=False, sync_device=True, app_key=None, decrypt_key=None, direct_report=True)
+        await bind_manager.async_init()
 
     async def start_havcs(event: Event):
         async def async_load_settings():
@@ -677,9 +411,6 @@ async def async_setup_entry(hass, config_entry):
                         break
         await async_init_sub_entry()
 
-        if DATA_HAVCS_MQTT in hass.data[DOMAIN]:
-            await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_publish("ai-home/http2mqtt2hass/"+app_key+"/response/test", 'init', 2, False)
-
         async def async_handler_service(service):
     
             if service.service == SERVICE_RELOAD:
@@ -694,8 +425,6 @@ async def async_setup_entry(hass, config_entry):
                         for mind_device in mind_devices:
                             _LOGGER.debug("%s", mind_device)
                     _LOGGER.info("[service] ------------%s 平台加载设备信息------------\n", platform)
-                if bind_device:
-                    await hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER].async_bind_device()
                 # 直连模式：同步设备时向小度推送全部设备的状态变化通知，触发云端回查刷新
                 bind_manager = hass.data[DOMAIN].get(DATA_HAVCS_BIND_MANAGER)
                 if bind_manager is not None and bind_manager.direct_report:
@@ -712,7 +441,7 @@ async def async_setup_entry(hass, config_entry):
 
         await hass.services.async_call(DOMAIN, SERVICE_RELOAD)
 
-        if CONF_HTTP in conf or CONF_HTTP_PROXY in conf:
+        if CONF_HTTP in conf:
             hass.async_create_task(http_manager.async_check_http_oauth())
 
     if config_entry.source == config_entries.SOURCE_IMPORT:
@@ -733,9 +462,6 @@ async def async_unload_entry(hass, config_entry):
         if unload_ok:
             hass.services.async_remove(DOMAIN, SERVICE_RELOAD)
             hass.services.async_remove(DOMAIN, SERVICE_DEBUG_DISCOVERY)
-            if DATA_HAVCS_MQTT in hass.data[DOMAIN]:
-                await hass.data[DOMAIN][DATA_HAVCS_MQTT].async_disconnect()
-                hass.data[DOMAIN].pop(DATA_HAVCS_MQTT)
             if DATA_HAVCS_BIND_MANAGER in hass.data[DOMAIN]:
                 hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER].clear()
             hass.data[DOMAIN].pop(DATA_HAVCS_CONFIG)

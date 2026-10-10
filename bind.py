@@ -12,8 +12,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.storage import Store
 
-from .const import HAVCS_SERVICE_URL, DUEROS_CHANGEREPORT_URL, DATA_HAVCS_HANDLER, DATA_HAVCS_BIND_MANAGER, DATA_HAVCS_ITEMS, STORAGE_VERSION, INTEGRATION
-from . import util as havcs_util
+from .const import DUEROS_CHANGEREPORT_URL, DATA_HAVCS_HANDLER, DATA_HAVCS_BIND_MANAGER, DATA_HAVCS_ITEMS, STORAGE_VERSION, INTEGRATION
 
 _LOGGER = logging.getLogger(__name__)
 LOGGER_NAME = 'bind'
@@ -47,8 +46,6 @@ class HavcsBindManager:
         self._pending_retries = set()
     async def async_init(self):
         await self.async_load()
-        if self._sync_manager.get('bind_device'):
-            await self.async_bind_device()
         if self._sync_manager.get('sync_device'):
             self.sync_device()
         if self._sync_manager.get('direct_report'):
@@ -179,31 +176,6 @@ class HavcsBindManager:
                 p_user_ids.append(p_user_id)
         return p_user_ids
 
-    async def async_bind_device(self):
-        for uuid in self._hass.data[INTEGRATION][DATA_HAVCS_BIND_MANAGER].discovery:
-            p_user_id = uuid.split('@')[0]
-            platform = uuid.split('@')[1]
-            if platform in self._hass.data[INTEGRATION][DATA_HAVCS_HANDLER] and getattr(self._hass.data[INTEGRATION][DATA_HAVCS_HANDLER].get(platform), 'should_report_when_starup', False) and hasattr(self._hass.data[INTEGRATION][DATA_HAVCS_HANDLER].get(platform), 'bind_device'):
-                err_result, devices, entity_ids = self._hass.data[INTEGRATION][DATA_HAVCS_HANDLER][platform].process_discovery_command()
-                if err_result:
-                    return
-                bind_entity_ids, unbind_entity_ids = await self._hass.data[INTEGRATION][DATA_HAVCS_BIND_MANAGER].async_save_changed_devices(entity_ids,platform, p_user_id,True)
-                payload = await self._hass.data[INTEGRATION][DATA_HAVCS_HANDLER][platform].bind_device(p_user_id, entity_ids , unbind_entity_ids, devices)
-                _LOGGER.debug("[skill] bind device to %s:\nbind_entity_ids = %s, unbind_entity_ids = %s", platform, bind_entity_ids, unbind_entity_ids)
-
-                if payload:
-                    url = HAVCS_SERVICE_URL + '/skill/smarthome.php?v=update&AppKey='+self._sync_manager.get('app_key')
-                    data = havcs_util.AESCipher(self._sync_manager.get('decrypt_key')).encrypt(json.dumps(payload, ensure_ascii = False).encode('utf8'))
-                    try:
-                        session = async_get_clientsession(self._hass, verify_ssl=False)
-                        with async_timeout.timeout(5, loop=self._hass.loop):
-                            response = await session.post(url, data=data)
-                            _LOGGER.debug("[skill] get bind device result from %s: %s", platform, await response.text())
-                    except(asyncio.TimeoutError, aiohttp.ClientError):
-                        _LOGGER.error("[skill] fail to access %s, bind device fail: timeout", url)
-                    except:
-                        _LOGGER.error("[skill] fail to access %s, bind device fail: %s", url, traceback.format_exc())
-    
     def sync_device(self):
     
         @callback
@@ -220,24 +192,8 @@ class HavcsBindManager:
                 if hasattr(handler, 'report_device'):
                     device_ids = handler.vcdm.get_entity_related_device_ids(self._hass, entity.entity_id)
                     for device_id in device_ids:
-                        if self._sync_manager.get('direct_report'):
-                            _LOGGER.debug("[skill] report device to %s: device_id = %s (entity_id = %s)", platform, device_id, event.data[ATTR_ENTITY_ID])
-                            await self.async_send_direct_report(platform, handler, device_id)
-                        else:
-                            payload = handler.report_device(device_id)
-                            _LOGGER.debug("[skill] report device to %s: platform = %s, device_id = %s (entity_id = %s), data = %s", platform, device_id, event.data[ATTR_ENTITY_ID], platform, payload)
-                            if payload:
-                                url = HAVCS_SERVICE_URL + '/skill/'+platform+'.php?v=report&AppKey=' + self._sync_manager.get('app_key')
-                                data = havcs_util.AESCipher(self._sync_manager.get('decrypt_key')).encrypt(json.dumps(payload, ensure_ascii = False).encode('utf8'))
-                                try:
-                                    session = async_get_clientsession(self._hass, verify_ssl=False)
-                                    with async_timeout.timeout(5, loop=self._hass.loop):
-                                        response = await session.post(url, data=data)
-                                        _LOGGER.debug("[skill] get report device result from %s: %s", platform, await response.text())
-                                except(asyncio.TimeoutError, aiohttp.ClientError):
-                                    _LOGGER.error("[skill] fail to access %s, report device fail: timeout", url)
-                                except:
-                                    _LOGGER.error("[skill] fail to access %s, report device fail: %s", url, traceback.format_exc())
+                        _LOGGER.debug("[skill] report device to %s: device_id = %s (entity_id = %s)", platform, device_id, event.data[ATTR_ENTITY_ID])
+                        await self.async_send_direct_report(platform, handler, device_id)
         
         self.clear()
         self._sync_manager['remove_listener'] = self._hass.bus.async_listen(EVENT_STATE_CHANGED, report_device)

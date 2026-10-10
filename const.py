@@ -1,5 +1,4 @@
 """Constants used by havcs."""
-HAVCS_SERVICE_URL = 'https://havcs.ljr.im:8123'
 DUEROS_CHANGEREPORT_URL = 'https://xiaodu.baidu.com/saiya/smarthome/changereport'
 
 ATTR_DEVICE_VISABLE  = 'visable'
@@ -14,7 +13,6 @@ ATTR_DEVICE_ACTIONS  = 'actions'
 ATTR_DEVICE_PROPERTIES = 'properties'
 
 DATA_HAVCS_CONFIG = 'config'
-DATA_HAVCS_MQTT = 'mqtt'
 DATA_HAVCS_BIND_MANAGER = 'bind_manager'
 DATA_HAVCS_HTTP_MANAGER = 'http_manager'
 DATA_HAVCS_ITEMS = 'items'

@@ -20,7 +20,7 @@ from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from pathlib import Path
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.frontend import DATA_PANELS
-from .const import DATA_HAVCS_HANDLER, INTEGRATION, DATA_HAVCS_ITEMS, CONF_DEVICE_CONFIG_PATH, DATA_HAVCS_SETTINGS, CONF_SETTINGS_CONFIG_PATH, DATA_HAVCS_CONFIG, HAVCS_SERVICE_URL, CLIENT_PALTFORM_DICT, DEVICE_TYPE_DICT, DEVICE_PLATFORM_DICT, DEVICE_ATTRIBUTE_DICT, DEVICE_ACTION_DICT, ATTR_DEVICE_ENTITY_ID
+from .const import DATA_HAVCS_HANDLER, INTEGRATION, DATA_HAVCS_ITEMS, CONF_DEVICE_CONFIG_PATH, DATA_HAVCS_SETTINGS, CONF_SETTINGS_CONFIG_PATH, DATA_HAVCS_CONFIG, CLIENT_PALTFORM_DICT, DEVICE_TYPE_DICT, DEVICE_PLATFORM_DICT, DEVICE_ATTRIBUTE_DICT, DEVICE_ACTION_DICT, ATTR_DEVICE_ENTITY_ID
 from . import util as havcs_util
 
 from multidict import MultiDict
@@ -395,6 +395,9 @@ class HavcsDeviceView(HomeAssistantView):
             for dict_name in dict_names:
                 dict_data = globals().get('DEVICE_' + dict_name.upper() + '_DICT')
                 if dict_data:
+                    # 天猫精灵/小京鱼/企业微信已停止服务，平台选项仅保留小度
+                    if dict_name == 'platform':
+                        dict_data = {'dueros': dict_data['dueros']}
                     data.update({dict_name: dict_data})
                 else:
                     return self.json({ 'code': 'error', 'Msg': '获取'+dict_name+'字典失败'})
