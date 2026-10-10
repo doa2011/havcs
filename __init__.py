@@ -135,7 +135,7 @@ HTTP_PROXY = vol.Schema({
 })
 
 SKILL_SCHEMA = vol.Schema({
-    vol.Optional(CONF_SYNC_DEVICE, default=False): cv.boolean,
+    vol.Optional(CONF_SYNC_DEVICE, default=True): cv.boolean,
     vol.Optional(CONF_BIND_DEVICE, default=True): cv.boolean
 })
 
@@ -181,7 +181,8 @@ DEVICE_CONFIG_SCHEMA = vol.Schema({
 
 ATTR_CONFIG_COMMAND_FILTER = 'command_filter'
 SETTINGS_CONFIG_SCHEMA = vol.Schema({
-    vol.Optional(ATTR_CONFIG_COMMAND_FILTER, default='none'): vol.Any('http', 'mqtt', 'none')
+    vol.Optional(ATTR_CONFIG_COMMAND_FILTER, default='none'): vol.Any('http', 'mqtt', 'none'),
+    vol.Optional('dueros_bot_id', default=''): cv.string
 },extra=vol.PREVENT_EXTRA)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -316,7 +317,7 @@ async def async_setup_entry(hass, config_entry):
         if not os.path.isfile(havc_device_config_path):
             with open(havc_device_config_path, "wt") as havc_device_config_file:
                 havc_device_config_file.write('')
-        hass.components.frontend.async_remove_panel(DOMAIN)
+        frontend.async_remove_panel(DOMAIN)
     else:
         havc_device_config_path = os.path.join(hass.config.config_dir, 'havcs-ui.yaml')
         if not os.path.isfile(havc_device_config_path):
@@ -342,6 +343,11 @@ async def async_setup_entry(hass, config_entry):
         _LOGGER.debug("[init] havcs only run in http mode, skip mqtt initialization")
         ha_url = conf.get(CONF_HTTP, {}).get(CONF_HA_URL, get_url(hass))
         _LOGGER.debug("[init] ha_url = %s, base_url = %s", ha_url, get_url(hass))
+        # 直连模式：创建绑定管理器，启用状态变化主动上报（百度官方 changereport 接口）
+        clients = conf.get(CONF_HTTP, {}).get(CONF_CLIENTS, {})
+        if platforms and clients:
+            bind_manager = hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER] = HavcsBindManager(hass, platforms, bind_device=False, sync_device=True, app_key=None, decrypt_key=None, direct_report=True)
+            await bind_manager.async_init()
     else:
         setting_conf = conf.get(CONF_SETTING)
         app_key = setting_conf.get(CONF_APP_KEY)
@@ -690,6 +696,10 @@ async def async_setup_entry(hass, config_entry):
                     _LOGGER.info("[service] ------------%s 平台加载设备信息------------\n", platform)
                 if bind_device:
                     await hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER].async_bind_device()
+                # 直连模式：同步设备时向小度推送全部设备的状态变化通知，触发云端回查刷新
+                bind_manager = hass.data[DOMAIN].get(DATA_HAVCS_BIND_MANAGER)
+                if bind_manager is not None and bind_manager.direct_report:
+                    await bind_manager.async_send_all_direct_reports()
 
             elif service.service == SERVICE_DEBUG_DISCOVERY:
                 for platform, handler in hass.data[DOMAIN][DATA_HAVCS_HANDLER].items():
@@ -734,7 +744,7 @@ async def async_unload_entry(hass, config_entry):
             hass.data[DOMAIN].pop(DATA_HAVCS_HTTP_MANAGER)
             hass.data[DOMAIN].pop(CONF_DEVICE_CONFIG_PATH)
             hass.data[DOMAIN].pop(CONF_SETTINGS_CONFIG_PATH)
-            hass.components.frontend.async_remove_panel(DOMAIN+'_panel')
+            frontend.async_remove_panel(DOMAIN+'_panel')
             if not hass.data[DOMAIN]:
                 hass.data.pop(DOMAIN)
             

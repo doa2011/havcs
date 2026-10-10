@@ -199,12 +199,24 @@
             min-height: 400px;
             max-height: 500px;
         }
-        
-        .weui-tabbar {
-            position: fixed;
+        /* 设备网格一行显示5个 */
+        .weui-grid {
+            width: 20%;
+            padding: 12px 2px;
         }
-        .weui-footer {
-            padding-bottom: 80px;
+        .weui-grid__label {
+            font-size: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        /* 设备方块右上角电源开关按钮 */
+        .grid-power {
+            position: absolute;
+            top: 0;
+            right: 0;
+            padding: 6px;
+            z-index: 2;
         }
     </style>
 </head>
@@ -223,33 +235,6 @@
     <!-- 路由匹配到的组件将渲染在这里 -->
     <router-view :notice="notice" :device-list="deviceList" v-if="isRouterAlive"></router-view>
     <div class="blank"></div>
-    <div class="weui-footer">
-        <p class="weui-footer__links">
-            <a href="https://ljr.im/articles/plugins-havcs-edible-instructions/" class="weui-footer__link">>介绍&教程<</a>
-            <a href="https://jq.qq.com/?_wv=1027&k=5mCE2MH" class="weui-footer__link">交流QQ群：307773400</a>
-        </p>
-        <p class="weui-footer-text">Copyright &copy; 2019-<script>document.write(new Date().getFullYear());</script> ljr.im</p>
-    </div>
-    <div class="weui-tabbar">
-        <a tab="device" class="weui-tabbar__item weui-bar__item--on">
-            <div class="weui-tabbar__icon">
-                <img src="./images/icon_nav_button.png" alt="">
-            </div>
-            <p class="weui-tabbar__label">设备管理</p>
-        </a>
-        <a tab="config" class="weui-tabbar__item">
-            <div class="weui-tabbar__icon">
-                <img src="./images/icon_nav_article.png" alt="">
-            </div>
-            <p class="weui-tabbar__label">插件配置信息</p>
-        </a>
-        <a tab="settings" class="weui-tabbar__item">
-            <div class="weui-tabbar__icon">
-                <img src="./images/icon_nav_cell.png" alt="">
-            </div>
-            <p class="weui-tabbar__label">参数设置</p>
-        </a>
-    </div>
 
 </div>
 
@@ -260,22 +245,7 @@
                 {{ notice.title }}
         </h1>
         <div class="page-hd-desc">
-    
-        </div>
-        <div class="weui-cells__title">公告</div>
-        <div class="weui-cells"> 
-            <div class="weui-cell">
-                <div class="weui-cell__hd"></div>
-                <div class="weui-cell__bd">
-                <ul id="notices">
-                    <li><a href='https://jq.qq.com/?_wv=1027&k=5mCE2MH' target="_blank">使用中遇到问题请加QQ群307773400反馈</a></li>
-                    <li v-for="item in notice.noticeList" style="display:none"><a v-bind:href='item.url' target="_blank">{{item.text}}</a></li>
-                </ul>
-                </div>
-                <div class="weui-cell__ft">
-                    <i class="weui-icon-info-circle"></i>
-                </div>
-            </div>
+
         </div>
     </div>
     <div class="blank"></div>
@@ -284,12 +254,15 @@
         <div class="weui-cells__title">设备列表&nbsp;<span v-if="deviceList.length>0" class="weui-badge">{{ deviceList.length }}</span></div>
         <div class="weui-grids">
             <template v-for="(item, index) in deviceList">
-            <a href="javascript:;" class="weui-grid js_grid" @click="addOrEdit(item.device_id)" >
+            <a href="javascript:;" :key="item.device_id" class="weui-grid js_grid" @click="addOrEdit(item.device_id)" >
                 <div class="weui-grid__icon">
-                    <i class= "mdi mdi-48px" v-bind:class="item.icon" style="color: #66ccff;"></i>
+                    <i class= "mdi mdi-48px" v-bind:class="item.icon" v-bind:style="{color: item.power == 'on' ? '#66ccff' : '#9a9a9a'}"></i>
                 </div>
                 <p class="weui-grid__label">{{ item.zone?item.name+"&nbsp（"+item.zone+"）" : item.name }}</p>
-            </a>            
+                <span class="grid-power" onclick="event.stopPropagation();window.havcsTogglePower(this)" v-bind:data-entities="JSON.stringify(item.entity_id)" v-bind:data-power="item.power" :title="'on'==item.power?'关闭':'打开'">
+                    <i class="mdi mdi-24px" v-bind:class="item.power == 'on' ? 'mdi-power' : 'mdi-power-off'" v-bind:style="{color: item.power == 'on' ? '#09bb07' : '#9a9a9a'}"></i>
+                </span>
+            </a>
             </template>
 
             <!-- <a href="javascript:;" class="weui-grid js_grid" @click="addOrEdit()" >
@@ -486,5 +459,47 @@
     </div>
 </template>
 <script src="js/main.min.js"></script>
+<script>
+// 定时刷新设备状态：仅重新拉取数据，Vue按设备ID复用节点局部更新，无闪烁
+setInterval(function() {
+    if (typeof vm !== 'undefined' && vm && typeof vm.getDevice === 'function') {
+        vm.getDevice();
+    }
+}, 20000);
+
+// 设备方块电源按钮：调用HA原生服务开关设备（独立于main.min.js，任何构建可用）
+window.havcsTogglePower = function(el) {
+    var entities;
+    try { entities = JSON.parse(el.dataset.entities || '[]'); } catch (e) { entities = []; }
+    var controllable = ["switch", "light", "fan", "humidifier", "airpurifier", "media_player", "input_boolean", "cover", "vacuum", "climate", "script"];
+    entities = entities.filter(function(e) { return controllable.indexOf(e.split(".")[0]) >= 0; });
+    if (!entities.length) {
+        if (window.jQuery) { $.toast("该设备没有可开关的实体", "forbidden"); }
+        return;
+    }
+    var service = el.dataset.power == 'on' ? 'turn_off' : 'turn_on';
+    var callSvc = function(domain, svc, data) {
+        return ha.getAuthorization().then(function(auth) {
+            return fetch('/api/services/' + domain + '/' + svc, {
+                method: 'post',
+                headers: { 'Authorization': auth, 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+        }).then(function(res) {
+            if (!res.ok) { throw new Error('service call failed: ' + res.status); }
+        });
+    };
+    Promise.all(entities.map(function(e) {
+        return callSvc(e.split(".")[0], service, { entity_id: e });
+    })).then(function() {
+        if (window.jQuery) { $.toast(service == 'turn_on' ? "已发送：打开" : "已发送：关闭", "info"); }
+        setTimeout(function() {
+            if (typeof vm !== 'undefined' && vm && typeof vm.getDevice === 'function') { vm.getDevice(); }
+        }, 800);
+    }).catch(function(e) {
+        if (window.jQuery) { $.toast("控制指令发送失败: " + (e && e.message ? e.message : ""), "error"); }
+    });
+};
+</script>
 </body>
 </html>

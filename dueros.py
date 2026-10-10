@@ -5,7 +5,7 @@ import logging
 
 from .util import decrypt_device_id, encrypt_device_id
 from .helper import VoiceControlProcessor, VoiceControlDeviceManager
-from .const import DATA_HAVCS_BIND_MANAGER, INTEGRATION, ATTR_DEVICE_ACTIONS
+from .const import DATA_HAVCS_BIND_MANAGER, DATA_HAVCS_SETTINGS, INTEGRATION, ATTR_DEVICE_ACTIONS
 
 _LOGGER = logging.getLogger(__name__)
 # _LOGGER.setLevel(logging.DEBUG)
@@ -300,6 +300,22 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
         self._hass = hass
         self._mode = mode
         self.vcdm = VoiceControlDeviceManager(entry, DOMAIN, self.device_action_map_h2p, self.device_attribute_map_h2p, self._service_map_p2h, self.device_type_map_h2p, self._device_type_alias)
+        # 直连模式：解析小度技能botId（优先级：请求携带 > settings配置 > 主配置中dueros开头的client_id）
+        self._bot_id = None
+        try:
+            settings = hass.data.get(INTEGRATION, {}).get(DATA_HAVCS_SETTINGS, {})
+            if settings.get('dueros_bot_id'):
+                self._bot_id = settings.get('dueros_bot_id')
+            else:
+                for ent in hass.config_entries.async_entries(INTEGRATION):
+                    for client_id in ((ent.data.get('http') or {}).get('clients') or {}):
+                        if client_id.startswith('dueros'):
+                            self._bot_id = client_id
+                            break
+                    if self._bot_id:
+                        break
+        except:
+            _LOGGER.debug("[%s] fail to resolve bot_id", LOGGER_NAME)
     def _errorResult(self, errorCode, messsage=None):
         """Generate error result"""
         error_code_map = {
@@ -330,6 +346,10 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
         action = self._prase_command(data, 'action')
         namespace = self._prase_command(data, 'namespace')
         p_user_id = self._prase_command(data, 'user_uid')
+        # 记录请求中携带的botId，用于直连模式主动上报
+        inbound_payload = self._prase_command(data, 'payload')
+        if isinstance(inbound_payload, dict) and inbound_payload.get('botId'):
+            self._bot_id = inbound_payload.get('botId')
         result = {}
         # uid = p_user_id+'@'+DOMAIN
 
@@ -475,6 +495,9 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
         properties = {}
         queryresponseattributes = ["humidity", "turnonstate", "state", "location"]
         action = action.replace('Request', '').replace('Get', '')
+        if action == 'ReportState':
+            # ChangeReport 主动上报后的回查：返回设备全部属性（官方上限10个）
+            return {'attributes': self._discovery_process_propertites(device_properties)[:10]}
         if action in self._query_map_p2h:
             for property_name, attr_template in self._query_map_p2h[action].items():
                 formattd_property = self.vcdm.format_property(self._hass, device_properties, attr_template)
@@ -533,6 +556,10 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
     def report_device(self, device_id):
 
         payload = []
+        # 按官方协议，ChangeReport仅通知属性变化（不带值），小度收到后会回查ReportState获取实际状态
+        bot_id = self._bot_id
+        if not bot_id:
+            bot_id = self._hass.data.get(INTEGRATION, {}).get(DATA_HAVCS_SETTINGS, {}).get('dueros_bot_id')
         for p_user_id in self._hass.data[INTEGRATION][DATA_HAVCS_BIND_MANAGER].get_uids(DOMAIN, device_id):
             _LOGGER.info("[%s] report device for %s:\n", LOGGER_NAME, p_user_id)
             report = {
@@ -543,7 +570,7 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
                     "payloadVersion": "1"
                 },
                 "payload": {
-                    "botId": "",
+                    "botId": bot_id or "",
                     "openUid": p_user_id,
                     "appliance": {
                         "applianceId": encrypt_device_id(device_id),

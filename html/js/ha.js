@@ -71,6 +71,23 @@ class HA {
         return this.post(url, params)
     }
 
+    // 调用Home Assistant原生服务，如 switch/turn_on
+    async callService(domain, service, data) {
+        let authorization = await this.getAuthorization()
+        let response = await fetch('/api/services/' + domain + '/' + service, {
+            method: 'post',
+            headers: {
+                'Authorization': authorization,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        })
+        if (!response.ok) {
+            throw new Error('service call failed: ' + response.status)
+        }
+        return response
+    }
+
     async post(url, params) {
         let data
         if(params instanceof FormData){

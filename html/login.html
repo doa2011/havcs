@@ -42,22 +42,7 @@
                 {{ notice.title }}
         </h1>
         <div class="page-hd-desc">
-    
-        </div>
-        <div class="weui-cells__title">公告</div>
-        <div class="weui-cells"> 
-            <div class="weui-cell">
-                <div class="weui-cell__hd"></div>
-                <div class="weui-cell__bd">
-                <ul id="notices">
-                    <li><a href='https://jq.qq.com/?_wv=1027&k=5mCE2MH' target="_blank">使用中遇到问题请加QQ群307773400反馈</a></li>
-                    <li v-for="item in notice.noticeList" style="display:none"><a v-bind:href='item.url' target="_blank">{{item.text}}</a></li>
-                </ul>
-                </div>
-                <div class="weui-cell__ft">
-                    <i class="weui-icon-info-circle"></i>
-                </div>
-            </div>
+
         </div>
     </div>
     <div class="blank"></div>
@@ -89,13 +74,6 @@
     </form>
 
     <div class="blank"></div>
-    <div class="weui-footer">
-        <p class="weui-footer__links">
-            <a href="https://ljr.im/articles/plugins-havcs-edible-instructions/" class="weui-footer__link">>介绍&教程<</a>
-            <a href="https://jq.qq.com/?_wv=1027&k=5mCE2MH" class="weui-footer__link">交流QQ群：307773400</a>
-        </p>
-        <p class="weui-footer-text">Copyright &copy; 2019-<script>document.write(new Date().getFullYear());</script> ljr.im</p>
-    </div>
 </div>
 <script>
 var vm = new Vue({
@@ -186,24 +164,6 @@ var vm = new Vue({
         }
     }
 });
-$(function(){
-    setInterval("noticeSwitch('notices',1000)",5000);
-}
-);
-function noticeSwitch(objId, time) {
-    obj= $("#"+objId);
-    if(obj.children("li").length ===1){
-        return;
-    }
-    if(obj.find("li:last").is(":visible") || obj.children("li:visible").length ===0){
-        obj.find("li:first").fadeIn(time).addClass("in");
-        obj.find("li:last").hide();
-    }else{
-        obj.find("li:visible").addClass("in");
-        obj.find("li.in").next().fadeIn(time);
-        $("li.in").hide().removeClass("in");
-    }
-}
 
 </script>
 </body>

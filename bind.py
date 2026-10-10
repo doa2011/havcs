@@ -4,12 +4,15 @@ import asyncio
 import async_timeout
 import logging
 import traceback
+from datetime import timedelta
 
 from homeassistant.const import EVENT_STATE_CHANGED, ATTR_ENTITY_ID
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
+from homeassistant.helpers.storage import Store
 
-from .const import HAVCS_SERVICE_URL, DATA_HAVCS_HANDLER, DATA_HAVCS_BIND_MANAGER, STORAGE_VERSION, INTEGRATION
+from .const import HAVCS_SERVICE_URL, DUEROS_CHANGEREPORT_URL, DATA_HAVCS_HANDLER, DATA_HAVCS_BIND_MANAGER, DATA_HAVCS_ITEMS, STORAGE_VERSION, INTEGRATION
 from . import util as havcs_util
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,9 +26,13 @@ class HavcsBindManager:
     _privious_upload_devices = {}
     _new_upload_devices = {}
     _discovery = set()
-    def __init__(self, hass, platforms, bind_device = False, sync_device = False, app_key = None, decrypt_key = None):
+    def __init__(self, hass, platforms, bind_device = False, sync_device = False, app_key = None, decrypt_key = None, direct_report = False):
         _LOGGER.debug("[bindManager] ----init bindManager----")
-        self._store = hass.helpers.storage.Store(STORAGE_VERSION, STORAGE_KEY)
+        # 兼容不同版本HA的Store签名：新版需要hass参数，旧版不需要
+        try:
+            self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        except TypeError:
+            self._store = Store(STORAGE_VERSION, STORAGE_KEY)
         self._platforms = platforms
         for platform in platforms:
             self._new_upload_devices[platform] = {}
@@ -34,14 +41,22 @@ class HavcsBindManager:
             'bind_device': bind_device,
             'sync_device': sync_device,
             'app_key': app_key,
-            'decrypt_key': decrypt_key
+            'decrypt_key': decrypt_key,
+            'direct_report': direct_report
         }
+        self._pending_retries = set()
     async def async_init(self):
         await self.async_load()
         if self._sync_manager.get('bind_device'):
             await self.async_bind_device()
         if self._sync_manager.get('sync_device'):
             self.sync_device()
+        if self._sync_manager.get('direct_report'):
+            # 启动30秒后全量上报一次，此后每30分钟对账一次
+            async_call_later(self._hass, 30, self._make_full_report_job('startup'))
+            # 新旧版本HA的参数顺序不同（新版hass,action,interval；旧版hass,interval,action），关键字传参兼容两者
+            self._sync_manager['remove_interval_listener'] = async_track_time_interval(
+                self._hass, action=self._make_full_report_job('periodic'), interval=timedelta(minutes=30))
 
     async def async_load(self):
         data =  await self._store.async_load()  # load task config from disk
@@ -134,7 +149,8 @@ class HavcsBindManager:
             self.add_discovery(uid)
             bind_entity_ids = self.get_bind_entity_ids(platform = platform,p_user_id =p_user_id, repeat_upload = False)
             unbind_entity_ids = self.get_unbind_entity_ids(platform = platform,p_user_id=p_user_id)
-            await self.async_save(platform, p_user_id=p_user_id)
+        # 每次发现都落盘并更新正式绑定表，保证新添加的设备也能被状态推送覆盖
+        await self.async_save(platform, p_user_id=p_user_id)
         # _LOGGER.debug("[bindManager] p_user_id:%s',p_user_id)
         # _LOGGER.debug("[bindManager] get_bind_entity_ids:%s", bind_entity_ids)
         # _LOGGER.debug("[bindManager] get_unbind_entity_ids:%s", unbind_entity_ids)
@@ -204,20 +220,24 @@ class HavcsBindManager:
                 if hasattr(handler, 'report_device'):
                     device_ids = handler.vcdm.get_entity_related_device_ids(self._hass, entity.entity_id)
                     for device_id in device_ids:
-                        payload = handler.report_device(device_id)
-                        _LOGGER.debug("[skill] report device to %s: platform = %s, device_id = %s (entity_id = %s), data = %s", platform, device_id, event.data[ATTR_ENTITY_ID], platform, payload)
-                        if payload:
-                            url = HAVCS_SERVICE_URL + '/skill/'+platform+'.php?v=report&AppKey=' + self._sync_manager.get('app_key')
-                            data = havcs_util.AESCipher(self._sync_manager.get('decrypt_key')).encrypt(json.dumps(payload, ensure_ascii = False).encode('utf8'))
-                            try:
-                                session = async_get_clientsession(self._hass, verify_ssl=False)
-                                with async_timeout.timeout(5, loop=self._hass.loop):
-                                    response = await session.post(url, data=data)
-                                    _LOGGER.debug("[skill] get report device result from %s: %s", platform, await response.text())
-                            except(asyncio.TimeoutError, aiohttp.ClientError):
-                                _LOGGER.error("[skill] fail to access %s, report device fail: timeout", url)
-                            except:
-                                _LOGGER.error("[skill] fail to access %s, report device fail: %s", url, traceback.format_exc())
+                        if self._sync_manager.get('direct_report'):
+                            _LOGGER.debug("[skill] report device to %s: device_id = %s (entity_id = %s)", platform, device_id, event.data[ATTR_ENTITY_ID])
+                            await self.async_send_direct_report(platform, handler, device_id)
+                        else:
+                            payload = handler.report_device(device_id)
+                            _LOGGER.debug("[skill] report device to %s: platform = %s, device_id = %s (entity_id = %s), data = %s", platform, device_id, event.data[ATTR_ENTITY_ID], platform, payload)
+                            if payload:
+                                url = HAVCS_SERVICE_URL + '/skill/'+platform+'.php?v=report&AppKey=' + self._sync_manager.get('app_key')
+                                data = havcs_util.AESCipher(self._sync_manager.get('decrypt_key')).encrypt(json.dumps(payload, ensure_ascii = False).encode('utf8'))
+                                try:
+                                    session = async_get_clientsession(self._hass, verify_ssl=False)
+                                    with async_timeout.timeout(5, loop=self._hass.loop):
+                                        response = await session.post(url, data=data)
+                                        _LOGGER.debug("[skill] get report device result from %s: %s", platform, await response.text())
+                                except(asyncio.TimeoutError, aiohttp.ClientError):
+                                    _LOGGER.error("[skill] fail to access %s, report device fail: timeout", url)
+                                except:
+                                    _LOGGER.error("[skill] fail to access %s, report device fail: %s", url, traceback.format_exc())
         
         self.clear()
         self._sync_manager['remove_listener'] = self._hass.bus.async_listen(EVENT_STATE_CHANGED, report_device)
@@ -227,3 +247,63 @@ class HavcsBindManager:
         if remove_listener:
             remove_listener()
             self._sync_manager.pop('remove_listener')
+        remove_interval_listener = self._sync_manager.get('remove_interval_listener')
+        if remove_interval_listener:
+            remove_interval_listener()
+            self._sync_manager.pop('remove_interval_listener')
+
+    @property
+    def direct_report(self):
+        return self._sync_manager.get('direct_report')
+
+    async def async_send_all_direct_reports(self):
+        """直连模式：向所有已绑定平台推送全部设备的状态变化通知（全量对账）"""
+        for platform, handler in self._hass.data[INTEGRATION][DATA_HAVCS_HANDLER].items():
+            if hasattr(handler, 'report_device'):
+                for device_id in self._hass.data[INTEGRATION][DATA_HAVCS_ITEMS]:
+                    await self.async_send_direct_report(platform, handler, device_id)
+
+    def _make_full_report_job(self, trigger):
+        async def _full_report(now):
+            _LOGGER.info("[skill] full state report triggered by %s", trigger)
+            try:
+                await self.async_send_all_direct_reports()
+            except:
+                _LOGGER.error("[skill] full state report fail: %s", traceback.format_exc())
+        return _full_report
+
+    async def async_send_direct_report(self, platform, handler, device_id):
+        """直连模式：明文JSON逐条推送百度官方"设备属性上报"接口，被限频(21207)时自动安排重试"""
+        payload = handler.report_device(device_id)
+        if not payload:
+            _LOGGER.debug("[skill] skip report, no bound user on %s: device_id = %s", platform, device_id)
+            return
+        for report in payload:
+            try:
+                session = async_get_clientsession(self._hass, verify_ssl=False)
+                with async_timeout.timeout(5):
+                    response = await session.post(DUEROS_CHANGEREPORT_URL, json=report)
+                    text = await response.text()
+                _LOGGER.info("[skill] get report device result from %s: %s", platform, text)
+                try:
+                    status = json.loads(text).get('status')
+                except ValueError:
+                    status = None
+                if status == 21207 and (platform, device_id) not in self._pending_retries:
+                    # 同一属性60秒限频，安排延迟重试保证最终状态同步
+                    self._pending_retries.add((platform, device_id))
+                    _LOGGER.info("[skill] report rate-limited, retry in 61s: device_id = %s", device_id)
+                    async_call_later(self._hass, 61, self._make_direct_report_retry(platform, handler, device_id))
+            except(asyncio.TimeoutError, aiohttp.ClientError):
+                _LOGGER.error("[skill] fail to access %s, report device fail: timeout", DUEROS_CHANGEREPORT_URL)
+            except:
+                _LOGGER.error("[skill] fail to access %s, report device fail: %s", DUEROS_CHANGEREPORT_URL, traceback.format_exc())
+
+    def _make_direct_report_retry(self, platform, handler, device_id):
+        async def _retry(now):
+            self._pending_retries.discard((platform, device_id))
+            try:
+                await self.async_send_direct_report(platform, handler, device_id)
+            except:
+                _LOGGER.error("[skill] retry report device fail: %s", traceback.format_exc())
+        return _retry

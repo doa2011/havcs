@@ -5,5 +5,5 @@
   "config_flow": true,
   "requirements": ["paho-mqtt>=1.4.0", "pycryptodome>=3.9.8"],
   "codeowners": ["@cnk700i","@dscao"],
-  "version": "2024.7.19"
+  "version": "2026.10.8"
 }
