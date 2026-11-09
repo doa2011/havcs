@@ -44,6 +44,7 @@ class HavcsBindManager:
         }
         self._pending_retries = set()
         self._retry_callbacks = {}
+        self._retry_attempts = {}
     async def async_init(self):
         await self.async_load()
         if self._sync_manager.get('sync_device'):
@@ -214,6 +215,7 @@ class HavcsBindManager:
             remove_callback()
         self._retry_callbacks.clear()
         self._pending_retries.clear()
+        self._retry_attempts.clear()
 
     @property
     def direct_report(self):
@@ -252,14 +254,19 @@ class HavcsBindManager:
                     status = json.loads(text).get('status')
                 except ValueError:
                     status = None
-                if status == 21207 and (platform, device_id) not in self._pending_retries:
-                    # 同一属性60秒限频，安排延迟重试保证最终状态同步
-                    retry_key = (platform, device_id)
-                    self._pending_retries.add(retry_key)
-                    _LOGGER.info("[skill] report rate-limited, retry in 61s: device_id = %s", device_id)
-                    self._retry_callbacks[retry_key] = async_call_later(
-                        self._hass, 61, self._make_direct_report_retry(platform, handler, device_id)
-                    )
+                retry_key = (platform, device_id)
+                if status == 21207:
+                    # Limit retries to one delayed attempt per device until a report succeeds.
+                    retry_attempts = self._retry_attempts.get(retry_key, 0)
+                    if retry_attempts < 1 and retry_key not in self._pending_retries:
+                        self._retry_attempts[retry_key] = retry_attempts + 1
+                        self._pending_retries.add(retry_key)
+                        _LOGGER.info("[skill] report rate-limited, retry in 61s: device_id = %s", device_id)
+                        self._retry_callbacks[retry_key] = async_call_later(
+                            self._hass, 61, self._make_direct_report_retry(platform, handler, device_id)
+                        )
+                elif status is not None:
+                    self._retry_attempts.pop(retry_key, None)
             except(asyncio.TimeoutError, aiohttp.ClientError):
                 _LOGGER.error("[skill] fail to access %s, report device fail: timeout", DUEROS_CHANGEREPORT_URL)
             except:
