@@ -1,5 +1,7 @@
 
+import ast
 import copy
+import json
 import voluptuous as vol
 import asyncio
 import logging
@@ -15,6 +17,31 @@ from .device import VoiceControllDevice
 
 _LOGGER = logging.getLogger(__name__)
 LOGGER_NAME = 'helper'
+
+
+def _parse_custom_action_data(value):
+    """Parse custom service data without evaluating executable code.
+
+    Existing HAVCS configurations commonly store Python-style dictionary
+    literals; JSON is also accepted for newer configurations.
+    """
+    if isinstance(value, dict):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            try:
+                parsed = json.loads(value)
+            except (ValueError, TypeError) as err:
+                raise ValueError("custom action data must be a dictionary literal") from err
+    else:
+        raise ValueError("custom action data must be a dictionary literal")
+
+    if not isinstance(parsed, dict):
+        raise ValueError("custom action data must evaluate to a dictionary")
+    return parsed
+
 
 DOMAIN_SERVICE_WITHOUT_ENTITY_ID = []
 DOMAIN_SERVICE_WITH_ENTITY_ID = ['common_timer','climate']
@@ -97,7 +124,16 @@ class VoiceControlProcessor:
         if device.custom_actions.get(ha_action):
             domain_list = [cmnd[0] for cmnd in device.custom_actions[ha_action]]
             service_list = [cmnd[1] for cmnd in device.custom_actions[ha_action]]
-            data_list = [eval(cmnd[2]) for cmnd in device.custom_actions[ha_action]]
+            try:
+                data_list = [_parse_custom_action_data(cmnd[2]) for cmnd in device.custom_actions[ha_action]]
+            except (ValueError, SyntaxError, TypeError) as err:
+                _LOGGER.error(
+                    "[%s] invalid custom action data for device %s: %s",
+                    LOGGER_NAME,
+                    device.device_id,
+                    err,
+                )
+                return self._errorResult('INVALIDATE_PARAMS'), None
             _LOGGER.debug("[%s] prepared domain_list: %s", LOGGER_NAME, domain_list)
             _LOGGER.debug("[%s] prepared service_list: %s", LOGGER_NAME, service_list)
             _LOGGER.debug("[%s] prepared data_list: %s", LOGGER_NAME, data_list)
