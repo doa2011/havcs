@@ -382,6 +382,8 @@
                     <input id="entityDomainFilter" class="weui-input" type="text" placeholder="筛选实体类型（默认全部）" readonly style="margin-bottom:8px"/>
                     <input id="entity_id" class="weui-input" type="text" placeholder="点击选择 HA 实体（支持多选）" readonly/>
                     <div style="font-size:12px;color:#888;margin-top:6px">点击选择器可按统一弹窗方式多选实体；可先按实体类型筛选。已选 {{ selectedEntityIds.length }} 个实体。</div>
+                    <input id="entity_id_manual" class="weui-input" type="text" v-model="entityManualInput" @change="syncManualEntityIds" placeholder="也可手动输入实体ID，多个用逗号分隔" style="margin-top:8px"/>
+                    <div style="font-size:12px;color:#888;margin-top:5px">手动输入支持逗号、空格或换行分隔；修改后以手动输入内容为准。</div>
                 </div>
             </div>
             <div class="weui-cell">
@@ -411,7 +413,7 @@
             <div class="weui-cell">
                 <div class="weui-cell__hd"><label for="" class="weui-label"><div class="required">type</div><div>（设备类型）</div></label></div>
                 <div class="weui-cell__bd weui-cell_primary">
-                    <input id='type' class="weui-input" type="text" v-model="device.type" placeholder="选择设备类型"/>
+                    <input id='type' class="weui-input" type="text" v-model="device.type" list="havcsTypeOptions" @change="onTypeInput" placeholder="选择或手动输入设备类型"/><datalist id="havcsTypeOptions"></datalist><div style="font-size:12px;color:#888;margin-top:5px">仅提供 HAVCS 支持的类型，也可以手动输入自定义类型。</div>
                 </div>
                 <div class="weui-cell__ft tooltip">
                     <label for="switchSyncFromType" class="weui-switch-cp">
