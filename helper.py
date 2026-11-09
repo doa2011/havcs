@@ -1,7 +1,5 @@
 
-import ast
 import copy
-import json
 import voluptuous as vol
 import asyncio
 import logging
@@ -13,34 +11,11 @@ from homeassistant.helpers import device_registry
 
 from .const import DATA_HAVCS_SETTINGS, INTEGRATION, DATA_HAVCS_ITEMS, ATTR_DEVICE_VISABLE, ATTR_DEVICE_ID, ATTR_DEVICE_ENTITY_ID, ATTR_DEVICE_TYPE, ATTR_DEVICE_NAME, ATTR_DEVICE_ZONE, ATTR_DEVICE_ATTRIBUTES, ATTR_DEVICE_ACTIONS, ATTR_DEVICE_PROPERTIES
 from .device import VoiceControllDevice
+from .parsers import parse_custom_action_data as _parse_custom_action_data
 
 
 _LOGGER = logging.getLogger(__name__)
 LOGGER_NAME = 'helper'
-
-
-def _parse_custom_action_data(value):
-    """Parse custom service data without evaluating executable code.
-
-    Existing HAVCS configurations commonly store Python-style dictionary
-    literals; JSON is also accepted for newer configurations.
-    """
-    if isinstance(value, dict):
-        parsed = value
-    elif isinstance(value, str):
-        try:
-            parsed = ast.literal_eval(value)
-        except (ValueError, SyntaxError):
-            try:
-                parsed = json.loads(value)
-            except (ValueError, TypeError) as err:
-                raise ValueError("custom action data must be a dictionary literal") from err
-    else:
-        raise ValueError("custom action data must be a dictionary literal")
-
-    if not isinstance(parsed, dict):
-        raise ValueError("custom action data must evaluate to a dictionary")
-    return parsed
 
 
 DOMAIN_SERVICE_WITHOUT_ENTITY_ID = []
