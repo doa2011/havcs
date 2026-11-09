@@ -144,7 +144,7 @@ class HavcsAuthorizeView(HomeAssistantView):
                         data.update({'state': state})
                     query_string = urlencode(data)
                     redirect_uri = parts.scheme + '://' + parts.netloc + parts.path +'?' + query_string + '&' + parts.query
-                    _LOGGER.debug("[%s][auth] redirect_uri = %s", LOGGER_NAME, redirect_uri)
+                    _LOGGER.debug("[%s][auth] authorization completed", LOGGER_NAME)
                     return self.json({ 'code': 'ok', 'Msg': '成功授权', 'data': {'location': redirect_uri}})
 
                     # return web.Response(headers={'Location': redirect_uri+'?'+query_string}, status=303)
@@ -187,8 +187,9 @@ class HavcsTokenView(HomeAssistantView):
         except json.decoder.JSONDecodeError:
             query_string = body_data if body_data else request.query_string
             data = { k:v[0] for k, v in parse.parse_qs(query_string).items() }
-        except:
-            _LOGGER.error("[%s][auth] handle request : %s", LOGGER_NAME, traceback.format_exc() )
+        except Exception:
+            _LOGGER.warning("[%s][auth] unable to parse OAuth token request", LOGGER_NAME)
+            return web.Response(body='400 ?(￣△￣?) 请求格式错误 (?￣△￣)?', status=400)
 
         # self._platform_uri = data.get('redirect_uri')
         # data['redirect_uri'] = self._havcs_token_url
