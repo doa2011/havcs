@@ -288,7 +288,9 @@ class HavcsBindManager:
                 _LOGGER.info("[skill] get report device result from %s: %s", platform, text)
                 try:
                     status = json.loads(text).get('status')
-                except ValueError:
+                    if isinstance(status, str) and status.isdigit():
+                        status = int(status)
+                except (ValueError, TypeError):
                     status = None
                 retry_key = (platform, device_id)
                 if status == 21207:
