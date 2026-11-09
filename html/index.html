@@ -234,6 +234,46 @@
         .weui-grid__icon:active i {
             transform: scale(.85);
         }
+        /* 设备右键/长按操作菜单与信息面板 */
+        #havcs-device-menu {
+            position: fixed; z-index: 10000; display: none; min-width: 150px;
+            padding: 6px 0; background: #fff; border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,.2); overflow: hidden;
+        }
+        #havcs-device-menu button {
+            display: block; width: 100%; border: 0; background: transparent;
+            padding: 13px 18px; text-align: left; color: #333; font-size: 14px;
+        }
+        #havcs-device-menu button:active { background: #f0f0f0; }
+        #havcs-device-info {
+            position: fixed; inset: 0; z-index: 10001; display: none;
+            align-items: center; justify-content: center; padding: 18px;
+            background: rgba(0,0,0,.45); box-sizing: border-box;
+        }
+        #havcs-device-info .havcs-info-card {
+            width: min(560px, 100%); max-height: 82vh; overflow: auto;
+            background: #fff; border-radius: 12px; padding: 18px;
+            box-sizing: border-box; text-align: left;
+        }
+        #havcs-device-info h3 { margin: 0 0 14px; font-size: 18px; font-weight: 500; }
+        #havcs-device-info .havcs-info-row { padding: 9px 0; border-bottom: 1px solid #eee; }
+        #havcs-device-info .havcs-info-label { color: #888; font-size: 12px; margin-bottom: 4px; }
+        #havcs-device-info .havcs-info-value {
+            color: #333; font-size: 14px; white-space: pre-wrap;
+            overflow-wrap: anywhere; font-family: inherit;
+        }
+        #havcs-device-info .havcs-info-actions {
+            display: flex; gap: 10px; margin-top: 16px;
+        }
+        #havcs-device-info .havcs-info-actions button {
+            flex: 1; border: 0; border-radius: 6px; padding: 11px;
+            font-size: 14px; background: #eee; color: #333;
+        }
+        #havcs-device-info .havcs-info-actions .primary {
+            background: #1aad19; color: #fff;
+        }
+        .weui-grid { -webkit-touch-callout: none; }
+
     </style>
 </head>
 
@@ -270,7 +310,7 @@
         <div class="weui-cells__title">设备列表&nbsp;<span v-if="deviceList.length>0" class="weui-badge">{{ deviceList.length }}</span></div>
         <div class="weui-grids">
             <template v-for="(item, index) in deviceList">
-            <a href="javascript:;" :key="item.device_id" class="weui-grid js_grid" @click="addOrEdit(item.device_id)" >
+            <a href="javascript:;" :key="item.device_id" :data-device-id="item.device_id" class="weui-grid js_grid" @click="addOrEdit(item.device_id)" >
                 <div class="weui-grid__icon" onclick="event.stopPropagation();window.havcsTogglePower(this)" v-bind:data-entities="JSON.stringify(item.entity_id)" v-bind:data-power="item.power" :title="'on'==item.power?'点击关闭':'点击打开'">
                     <i class= "mdi mdi-48px" v-bind:class="item.icon" v-bind:style="{color: item.power == 'on' ? '#66ccff' : '#9a9a9a'}"></i>
                 </div>
@@ -589,5 +629,171 @@ window.havcsTogglePower = function(el) {
     });
 };
 </script>
+
+<div id="havcs-device-menu" role="menu" aria-label="设备操作">
+    <button type="button" data-havcs-action="view">查看设备信息</button>
+    <button type="button" data-havcs-action="edit">修改设备</button>
+</div>
+<div id="havcs-device-info" role="dialog" aria-modal="true" aria-label="设备信息">
+    <div class="havcs-info-card">
+        <h3 id="havcs-device-info-title">设备信息</h3>
+        <div id="havcs-device-info-content"></div>
+        <div class="havcs-info-actions">
+            <button type="button" data-havcs-info-action="close">关闭</button>
+            <button type="button" class="primary" data-havcs-info-action="edit">修改设备</button>
+        </div>
+    </div>
+</div>
+<script>
+// 设备卡片上下文操作：桌面端右键，触屏端长按；普通点击仍保持原有编辑行为。
+(function () {
+    var menu = document.getElementById('havcs-device-menu');
+    var infoDialog = document.getElementById('havcs-device-info');
+    var infoTitle = document.getElementById('havcs-device-info-title');
+    var infoContent = document.getElementById('havcs-device-info-content');
+    var activeDeviceId = null;
+    var holdTimer = null;
+    var startPoint = null;
+    var longPressTriggered = false;
+    var suppressCardClick = false;
+    var labels = {
+        device_id: '设备 ID', name: '设备名称', en_name: '英文名称',
+        entity_id: '关联 HA 实体', zone: '设备位置', visable: '可见平台',
+        type: '设备类型', icon: '图标', attributes: '设备属性',
+        actions: '控制指令', properties: '设备属性映射', power: '当前状态'
+    };
+
+    function findCard(target) {
+        return target && target.closest ? target.closest('.weui-grid[data-device-id]') : null;
+    }
+    function getDevice(id) {
+        if (!window.vm || !Array.isArray(window.vm.deviceList)) return null;
+        return window.vm.deviceList.find(function (item) { return String(item.device_id) === String(id); }) || null;
+    }
+    function closeMenu() {
+        menu.style.display = 'none';
+        activeDeviceId = null;
+    }
+    function openMenu(card, x, y) {
+        var deviceId = card.getAttribute('data-device-id');
+        if (!getDevice(deviceId)) return;
+        activeDeviceId = deviceId;
+        menu.style.display = 'block';
+        var width = menu.offsetWidth || 160;
+        var height = menu.offsetHeight || 96;
+        menu.style.left = Math.max(8, Math.min(x, window.innerWidth - width - 8)) + 'px';
+        menu.style.top = Math.max(8, Math.min(y, window.innerHeight - height - 8)) + 'px';
+    }
+    function showDeviceInfo() {
+        var device = getDevice(activeDeviceId);
+        if (!device) return;
+        infoTitle.textContent = device.name || device.device_id || '设备信息';
+        infoContent.textContent = '';
+        Object.keys(labels).forEach(function (key) {
+            if (!Object.prototype.hasOwnProperty.call(device, key)) return;
+            var row = document.createElement('div');
+            row.className = 'havcs-info-row';
+            var label = document.createElement('div');
+            label.className = 'havcs-info-label';
+            label.textContent = labels[key];
+            var value = document.createElement('div');
+            value.className = 'havcs-info-value';
+            var raw = device[key];
+            value.textContent = raw !== null && typeof raw === 'object'
+                ? JSON.stringify(raw, null, 2)
+                : String(raw === null || typeof raw === 'undefined' ? '' : raw);
+            row.appendChild(label);
+            row.appendChild(value);
+            infoContent.appendChild(row);
+        });
+        infoDialog.style.display = 'flex';
+        closeMenu();
+    }
+    function editDevice() {
+        var id = activeDeviceId;
+        if (!id || !window.vm || !window.vm.$router) return;
+        closeMenu();
+        infoDialog.style.display = 'none';
+        window.vm.$router.push({ name: 'device:edit', params: { device_id: id } });
+    }
+    function cancelHold() {
+        if (holdTimer) window.clearTimeout(holdTimer);
+        holdTimer = null;
+    }
+
+    document.addEventListener('contextmenu', function (event) {
+        var card = findCard(event.target);
+        if (!card) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openMenu(card, event.clientX, event.clientY);
+    }, true);
+
+    document.addEventListener('touchstart', function (event) {
+        var card = findCard(event.target);
+        if (!card || !event.touches || event.touches.length !== 1) return;
+        cancelHold();
+        longPressTriggered = false;
+        startPoint = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+        holdTimer = window.setTimeout(function () {
+            longPressTriggered = true;
+            suppressCardClick = true;
+            openMenu(card, startPoint.x, startPoint.y);
+        }, 550);
+    }, { capture: true, passive: true });
+
+    document.addEventListener('touchmove', function (event) {
+        if (!holdTimer || !startPoint || !event.touches || !event.touches.length) return;
+        var dx = event.touches[0].clientX - startPoint.x;
+        var dy = event.touches[0].clientY - startPoint.y;
+        if (Math.sqrt(dx * dx + dy * dy) > 12) cancelHold();
+    }, { capture: true, passive: true });
+
+    document.addEventListener('touchend', function () {
+        cancelHold();
+        if (longPressTriggered) {
+            window.setTimeout(function () { suppressCardClick = false; }, 800);
+        }
+        startPoint = null;
+    }, true);
+    document.addEventListener('touchcancel', cancelHold, true);
+
+    document.addEventListener('click', function (event) {
+        if (suppressCardClick && findCard(event.target)) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+            suppressCardClick = false;
+            return;
+        }
+        if (menu.contains(event.target)) {
+            var action = event.target.getAttribute('data-havcs-action');
+            if (action === 'view') showDeviceInfo();
+            if (action === 'edit') editDevice();
+            return;
+        }
+        if (infoDialog.contains(event.target)) {
+            var infoAction = event.target.getAttribute('data-havcs-info-action');
+            if (infoAction === 'close' || event.target === infoDialog) {
+                infoDialog.style.display = 'none';
+            } else if (infoAction === 'edit') {
+                editDevice();
+            }
+            return;
+        }
+        if (menu.style.display === 'block') closeMenu();
+    }, true);
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+            closeMenu();
+            infoDialog.style.display = 'none';
+        }
+    });
+    window.addEventListener('resize', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+})();
+</script>
+
 </body>
 </html>
