@@ -45,6 +45,10 @@ class HavcsBindManager:
         self._pending_retries = set()
         self._retry_callbacks = {}
         self._retry_attempts = {}
+        self._pending_report_callbacks = {}
+        self._pending_report_tokens = {}
+        self._report_semaphore = asyncio.Semaphore(3)
+
     async def async_init(self):
         await self.async_load()
         if self._sync_manager.get('sync_device'):
@@ -180,26 +184,55 @@ class HavcsBindManager:
         return p_user_ids
 
     def sync_device(self):
-    
         @callback
         def report_device(event):
-            # _LOGGER.debug("[skill] %s changed, try to report", event.data[ATTR_ENTITY_ID])
-            self._hass.add_job(async_report_device(event))
-
-        async def async_report_device(event):
-            """report device state when changed. """
-            entity = self._hass.states.get(event.data[ATTR_ENTITY_ID])
+            """Debounce state changes and report only the latest state per device."""
+            entity_id = event.data.get(ATTR_ENTITY_ID)
+            entity = self._hass.states.get(entity_id) if entity_id else None
             if entity is None:
                 return
+
             for platform, handler in self._hass.data[INTEGRATION][DATA_HAVCS_HANDLER].items():
-                if hasattr(handler, 'report_device'):
-                    device_ids = handler.vcdm.get_entity_related_device_ids(self._hass, entity.entity_id)
-                    for device_id in device_ids:
-                        _LOGGER.debug("[skill] report device to %s: device_id = %s (entity_id = %s)", platform, device_id, event.data[ATTR_ENTITY_ID])
-                        await self.async_send_direct_report(platform, handler, device_id)
-        
+                if not hasattr(handler, 'report_device'):
+                    continue
+                device_ids = handler.vcdm.get_entity_related_device_ids(self._hass, entity.entity_id)
+                for device_id in device_ids:
+                    _LOGGER.debug(
+                        "[skill] queue state report to %s: device_id = %s (entity_id = %s)",
+                        platform,
+                        device_id,
+                        entity_id,
+                    )
+                    self._schedule_direct_report(platform, handler, device_id)
+
         self.clear()
-        self._sync_manager['remove_listener'] = self._hass.bus.async_listen(EVENT_STATE_CHANGED, report_device)
+        self._sync_manager['remove_listener'] = self._hass.bus.async_listen(
+            EVENT_STATE_CHANGED, report_device
+        )
+
+    def _schedule_direct_report(self, platform, handler, device_id):
+        """Schedule a coalesced report, replacing an older pending report."""
+        key = (platform, device_id)
+        remove_callback = self._pending_report_callbacks.pop(key, None)
+        if remove_callback is not None:
+            remove_callback()
+
+        token = object()
+        self._pending_report_tokens[key] = token
+
+        async def _report_latest(now):
+            if self._pending_report_tokens.get(key) is not token:
+                return
+            self._pending_report_tokens.pop(key, None)
+            self._pending_report_callbacks.pop(key, None)
+            try:
+                await self.async_send_direct_report(platform, handler, device_id)
+            except Exception:
+                _LOGGER.exception("[skill] state report failed for device_id=%s", device_id)
+
+        self._pending_report_callbacks[key] = async_call_later(
+            self._hass, 1, _report_latest
+        )
 
     def clear(self):
         remove_listener = self._sync_manager.get('remove_listener')
@@ -211,9 +244,11 @@ class HavcsBindManager:
             if remove_callback:
                 remove_callback()
 
-        for remove_callback in self._retry_callbacks.values():
-            remove_callback()
-        self._retry_callbacks.clear()
+        for callback_map in (self._retry_callbacks, self._pending_report_callbacks):
+            for remove_callback in callback_map.values():
+                remove_callback()
+            callback_map.clear()
+        self._pending_report_tokens.clear()
         self._pending_retries.clear()
         self._retry_attempts.clear()
 
@@ -246,9 +281,10 @@ class HavcsBindManager:
         for report in payload:
             try:
                 session = async_get_clientsession(self._hass)
-                with async_timeout.timeout(5):
-                    response = await session.post(DUEROS_CHANGEREPORT_URL, json=report)
-                    text = await response.text()
+                async with self._report_semaphore:
+                    with async_timeout.timeout(5):
+                        response = await session.post(DUEROS_CHANGEREPORT_URL, json=report)
+                        text = await response.text()
                 _LOGGER.info("[skill] get report device result from %s: %s", platform, text)
                 try:
                     status = json.loads(text).get('status')
