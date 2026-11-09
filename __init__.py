@@ -443,12 +443,16 @@ async def async_setup_entry(hass, config_entry):
         await hass.services.async_call(DOMAIN, SERVICE_RELOAD)
 
         if CONF_HTTP in conf:
-            hass.async_create_task(http_manager.async_check_http_oauth())
+            hass.data[DOMAIN]['oauth_check_task'] = hass.async_create_task(
+                http_manager.async_check_http_oauth()
+            )
 
     if config_entry.source == config_entries.SOURCE_IMPORT:
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, start_havcs)
+        hass.data[DOMAIN]['remove_start_listener'] = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_START, start_havcs
+        )
     elif config_entry.source == config_entries.SOURCE_USER:
-        hass.async_create_task(start_havcs(None))
+        hass.data[DOMAIN]['startup_task'] = hass.async_create_task(start_havcs(None))
 
     _LOGGER.info("[init] havcs initialization finished.")
     return True
@@ -461,6 +465,15 @@ async def async_unload_entry(hass, config_entry):
         else:
             unload_ok =True
         if unload_ok:
+            remove_start_listener = hass.data[DOMAIN].pop('remove_start_listener', None)
+            if remove_start_listener is not None:
+                remove_start_listener()
+
+            for task_key in ('startup_task', 'oauth_check_task'):
+                task = hass.data[DOMAIN].pop(task_key, None)
+                if task is not None and not task.done():
+                    task.cancel()
+
             hass.services.async_remove(DOMAIN, SERVICE_RELOAD)
             hass.services.async_remove(DOMAIN, SERVICE_DEBUG_DISCOVERY)
             bind_manager = hass.data[DOMAIN].pop(DATA_HAVCS_BIND_MANAGER, None)
