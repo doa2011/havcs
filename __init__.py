@@ -204,7 +204,7 @@ async def async_setup_entry(hass, config_entry):
     hass.data[DOMAIN].setdefault(DATA_HAVCS_SETTINGS, {})
     conf = hass.data[DOMAIN].get(DATA_HAVCS_CONFIG)
     
-    _LOGGER.debug(conf)
+    _LOGGER.debug("[init] loading HAVCS configuration")
     
     _LOGGER.debug(config_entry.source)
     
@@ -251,8 +251,8 @@ async def async_setup_entry(hass, config_entry):
             conf = CONFIG_SCHEMA({DOMAIN: dict(config_entry.data)})[DOMAIN]
         elif any(key in conf for key in config_entry.data):
             _LOGGER.warning(
-                "[init] Data in your config entry is going to override your "
-                "configuration.yaml: %s", config_entry.data)
+                "[init] Data in your config entry is going to override matching "
+                "configuration.yaml options")
             for key in config_entry.data:
                 if key in conf:
                     if isinstance(conf[key], dict):
