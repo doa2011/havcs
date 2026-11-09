@@ -192,11 +192,11 @@ class VoiceControlProcessor:
     def process_query_command(self, command) -> tuple:
         device_id = self._prase_command(command, 'device_id')
         device_id = self._decrypt_device_id(device_id)
-        if device_id is None:
+        device = self.vcdm.get(device_id) if device_id is not None else None
+        if device is None:
             return self._errorResult('DEVICE_IS_NOT_EXIST'), None
         action = self._prase_command(command, 'action')
-        device_properties = self.vcdm.get(device_id).properties
-        properties = self._query_process_propertites(device_properties, action)
+        properties = self._query_process_propertites(device.properties, action)
         _LOGGER.debug(properties)
         return (None, properties) if properties else (self._errorResult('IOT_DEVICE_OFFLINE'), None)
 
