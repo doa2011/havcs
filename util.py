@@ -111,5 +111,5 @@ def update_token_expiration(access_token, hass, expiration):
                 hass.auth._store._async_schedule_save()
                 return True
     except jwt.InvalidTokenError:
-        _LOGGER.debug("[util] access_token[%s] is invalid, try another reauthorization on website", access_token)
+        _LOGGER.debug("[util] access token is invalid, reauthorization may be required")
         return False
