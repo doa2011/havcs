@@ -652,6 +652,7 @@ window.havcsTogglePower = function(el) {
     var infoTitle = document.getElementById('havcs-device-info-title');
     var infoContent = document.getElementById('havcs-device-info-content');
     var activeDeviceId = null;
+    var infoDeviceId = null;
     var holdTimer = null;
     var startPoint = null;
     var longPressTriggered = false;
@@ -685,7 +686,8 @@ window.havcsTogglePower = function(el) {
         menu.style.top = Math.max(8, Math.min(y, window.innerHeight - height - 8)) + 'px';
     }
     function showDeviceInfo() {
-        var device = getDevice(activeDeviceId);
+        infoDeviceId = activeDeviceId;
+        var device = getDevice(infoDeviceId);
         if (!device) return;
         infoTitle.textContent = device.name || device.device_id || '设备信息';
         infoContent.textContent = '';
@@ -709,12 +711,14 @@ window.havcsTogglePower = function(el) {
         infoDialog.style.display = 'flex';
         closeMenu();
     }
-    function editDevice() {
-        var id = activeDeviceId;
+    function editDevice(fromInfo) {
+        var id = fromInfo ? infoDeviceId : activeDeviceId;
         if (!id || !window.vm || !window.vm.$router) return;
         closeMenu();
         infoDialog.style.display = 'none';
         window.vm.$router.push({ name: 'device:edit', params: { device_id: id } });
+        activeDeviceId = null;
+        infoDeviceId = null;
     }
     function cancelHold() {
         if (holdTimer) window.clearTimeout(holdTimer);
@@ -777,7 +781,7 @@ window.havcsTogglePower = function(el) {
             if (infoAction === 'close' || event.target === infoDialog) {
                 infoDialog.style.display = 'none';
             } else if (infoAction === 'edit') {
-                editDevice();
+                editDevice(true);
             }
             return;
         }
