@@ -379,10 +379,8 @@
             <div class="weui-cell">
                 <div class="weui-cell__hd"><label for="" class="weui-label"><div class="required">type</div><div>（设备类型）</div></label></div>
                 <div class="weui-cell__bd weui-cell_primary">
-                    <input id='type' class="weui-input" type="text" v-model="device.type" placeholder="选择设备类型" readonly/>
+                    <input id="type" class="weui-input" type="text" v-model="device.type" placeholder="选择设备类型" readonly/>
                     <div style="font-size:12px;color:#888;margin-top:5px">选择 HAVCS 支持的设备类型，系统将自动筛选对应的 HA 实体。</div>
-                </div>
-                <div class="weui-cell__ft tooltip"><label for="switchSyncFromType" class="weui-switch-cp"><input id="switchSyncFromType" class="weui-switch-cp__input" type="checkbox" checked="checked"><div class="weui-switch-cp__box "></div></label><span class="tooltiptext">同步设置图标</span></div>
                 </div>
                 <div class="weui-cell__ft tooltip">
                     <label for="switchSyncFromType" class="weui-switch-cp">
@@ -392,26 +390,6 @@
                     <span class="tooltiptext">同步设置图标</span>
                 </div>
             </div>
-            <div class="weui-cell">
-                <div class="weui-cell__hd"><label class="weui-label"><div>icon</div><div>（图标）</div></label></div>
-                <div class="weui-cell__bd weui-cell_primary">
-                    <input class="weui-input" id="icon" type="text" v-model="device.icon" placeholder="填写图标名称，样式见网站：http://cdn.materialdesignicons.com/5.0.45/"/>
-                </div>
-            </div>  
-            <div class="weui-cell">
-                <div class="weui-cell__hd"><label for="" class="weui-label"><div>attributes</div><div>（设备属性）</div></label></div>
-                <div class="weui-cell__bd weui-cell_primary">
-                    <input id='attributes' class="weui-input" type="text" v-model="device.attributes" placeholder="自定义设备属性"/>                    
-                </div>
-            </div>
-            <div class="weui-cell">
-                <div class="weui-cell__hd"><label for="" class="weui-label"><div>actions</div><div>（控制指令）</div></label></div>
-                <div class="weui-cell__bd weui-cell_primary">
-                    <input id='actions' class="weui-input" type="text" v-model="actionKeys" placeholder="自定义控制指令"/>
-                </div>
-            </div> 
-
-        </div>
             <div class="weui-cell">
                 <div class="weui-cell__hd"><label class="weui-label"><div class="required">entity_id</div><div>（选择HA实体，可多选）</div></label></div>
                 <div class="weui-cell__bd weui-cell_primary">
@@ -436,7 +414,7 @@
             <div class="weui-cell">
                 <div class="weui-cell__hd"><label for="" class="weui-label"><div>zone</div><div>（位置）</div></label></div>
                 <div class="weui-cell__bd weui-cell_primary">
-                    <input id='zone' class="weui-input" type="text" v-model='device.zone' placeholder="填写设备位置"/>
+                    <input id="zone" class="weui-input" type="text" v-model="device.zone" placeholder="填写设备位置"/>
                 </div>
             </div>
             <div class="weui-cell">
@@ -445,7 +423,25 @@
                     <input id="visable" class="weui-input" type="text" v-model="device.visable" placeholder="选择音箱平台"/>
                 </div>
             </div>
-
+            <div class="weui-cell">
+                <div class="weui-cell__hd"><label class="weui-label"><div>icon</div><div>（图标）</div></label></div>
+                <div class="weui-cell__bd weui-cell_primary">
+                    <input class="weui-input" id="icon" type="text" v-model="device.icon" placeholder="填写图标名称，样式见网站：http://cdn.materialdesignicons.com/5.0.45/"/>
+                </div>
+            </div>
+            <div class="weui-cell">
+                <div class="weui-cell__hd"><label for="" class="weui-label"><div>attributes</div><div>（设备属性）</div></label></div>
+                <div class="weui-cell__bd weui-cell_primary">
+                    <input id="attributes" class="weui-input" type="text" v-model="device.attributes" placeholder="自定义设备属性"/>
+                </div>
+            </div>
+            <div class="weui-cell">
+                <div class="weui-cell__hd"><label for="" class="weui-label"><div>actions</div><div>（控制指令）</div></label></div>
+                <div class="weui-cell__bd weui-cell_primary">
+                    <input id="actions" class="weui-input" type="text" v-model="actionKeys" placeholder="自定义控制指令"/>
+                </div>
+            </div>
+        </div>
         <div v-if="showCustomAction" class="weui-cells__title">自定义actions（格式：['domain', 'service', 'service_data'], service_data要符合json格式，样例：['common_timer', 'cancel', '{"entity_id":"switch.demo"}']）</div>
         <multi-input v-for="(value, key) in device.actions" v-if="customAction.includes(key)" :key='key' :label='key' :data='value' @update-action="updateAction"></multi-input>
         <div class="blank"></div>
