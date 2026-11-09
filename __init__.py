@@ -6,6 +6,7 @@ recommended version HA version: 0.114.4
 
 import asyncio
 import gzip
+import zlib
 from pathlib import Path
 from datetime import datetime, timedelta
 import importlib
@@ -215,7 +216,7 @@ def _sync_precompressed_assets(static_dir: str) -> int:
         try:
             compressed_data = compressed_path.read_bytes()
             is_current = gzip.decompress(compressed_data) == source_data
-        except (OSError, EOFError, gzip.BadGzipFile):
+        except (OSError, EOFError, gzip.BadGzipFile, zlib.error):
             is_current = False
 
         if is_current:
