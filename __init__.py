@@ -480,10 +480,14 @@ async def async_unload_entry(hass, config_entry):
             if remove_start_listener is not None:
                 remove_start_listener()
 
+            tasks_to_cancel = []
             for task_key in ('startup_task', 'oauth_check_task'):
                 task = hass.data[DOMAIN].pop(task_key, None)
                 if task is not None and not task.done():
                     task.cancel()
+                    tasks_to_cancel.append(task)
+            if tasks_to_cancel:
+                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
 
             hass.services.async_remove(DOMAIN, SERVICE_RELOAD)
             hass.services.async_remove(DOMAIN, SERVICE_DEBUG_DISCOVERY)
