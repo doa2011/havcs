@@ -21,5 +21,7 @@ jobs:
           python-version: "3.13"
       - name: Compile Python sources
         run: python -m compileall -q .
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
       - name: Validate integration manifest
         run: python -c "import json; json.load(open('manifest.json', encoding='utf-8'))"
