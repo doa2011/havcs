@@ -25,3 +25,20 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Validate integration manifest
         run: python -c "import json; json.load(open('manifest.json', encoding='utf-8'))"
+
+  home-assistant-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Home Assistant 2026.11
+        run: python -m pip install "homeassistant==2026.11.0" pycryptodome
+      - name: Import HAVCS integration against Home Assistant
+        run: |
+          mkdir -p /tmp/ha-config/custom_components
+          cp -a . /tmp/ha-config/custom_components/havcs
+          PYTHONPATH=/tmp/ha-config python -c "import custom_components.havcs; import custom_components.havcs.http; import custom_components.havcs.bind; import custom_components.havcs.dueros"
