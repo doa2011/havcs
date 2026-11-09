@@ -77,7 +77,14 @@ class HavcsAuthorizeView(HomeAssistantView):
     async def head(self, request):
         return
 
+    def update_from(self, other):
+        """Refresh configuration while keeping the already-registered route."""
+        self._ha_url = other._ha_url
+        self._authorize_url = other._authorize_url
+
     async def get(self, request):
+        if INTEGRATION not in self._hass.data:
+            return web.Response(status=503)
         client_id = request.query.get('client_id')
         if client_id in self._hass.data[INTEGRATION][DATA_HAVCS_CONFIG].get('http', {}).get('clients', {}).keys():
             with open(self._hass.config.path("custom_components/" + INTEGRATION + "/html/login.html"), mode="r", encoding='UTF-8') as f:
@@ -86,6 +93,8 @@ class HavcsAuthorizeView(HomeAssistantView):
         return web.Response(body='401 ?(￣△￣?) 参数不全拒绝访问 (?￣△￣)?', status=401)
 
     async def post(self, request):
+        if INTEGRATION not in self._hass.data:
+            return web.Response(status=503)
         remote_addr = request.get('ha_real_ip')
         login_attemp = self._login_attempts.setdefault(remote_addr, {'count': 0, 'first_time': None, 'last_time': datetime.now()})
         req = await request.post()
@@ -177,10 +186,19 @@ class HavcsTokenView(HomeAssistantView):
         self._client_id = ha_url
         self._expiration = expiration
 
+    def update_from(self, other):
+        """Refresh configuration while keeping the already-registered route."""
+        self._havcs_token_url = other._havcs_token_url
+        self._token_url = other._token_url
+        self._client_id = other._client_id
+        self._expiration = other._expiration
+
     async def get(self, request):
         return web.Response(body='404 (￣ε￣) 访问到空气页面 (￣з￣)', status=404)
 
     async def post(self, request):
+        if INTEGRATION not in self._hass.data:
+            return web.Response(status=503)
         body_data = await request.text()
         try:
             data = json.loads(body_data)
@@ -293,7 +311,13 @@ class HavcsSettingsView(HomeAssistantView):
     async def get(self, request):
         return web.Response(body='404 (￣ε￣) 访问到空气页面 (￣з￣)', status=404)
 
+    def update_from(self, other):
+        """Refresh configuration while keeping the already-registered route."""
+        self._settings_schema = other._settings_schema
+
     async def post(self, request):
+        if INTEGRATION not in self._hass.data:
+            return web.Response(status=503)
         if request.content_type == 'multipart/form-data':
             req = await request.post()
         else:
@@ -365,7 +389,13 @@ class HavcsDeviceView(HomeAssistantView):
             pass
         return 'off'
 
+    def update_from(self, other):
+        """Refresh configuration while keeping the already-registered route."""
+        self._device_schema = other._device_schema
+
     async def post(self, request):
+        if INTEGRATION not in self._hass.data:
+            return web.Response(status=503)
         if request.content_type == 'multipart/form-data':
             req = await request.post()
         else:
@@ -455,20 +485,32 @@ class HavcsHttpManager:
     def set_expiration(self, expiration):
         self._expiration = expiration
 
+    def _register_view(self, key, view):
+        """Register each HTTP route once; Home Assistant has no view-unregister API."""
+        views = self._hass.data.setdefault('_havcs_http_views', {})
+        registered_view = views.get(key)
+        if registered_view is not None:
+            update_from = getattr(registered_view, 'update_from', None)
+            if update_from is not None:
+                update_from(view)
+            return
+        self._hass.http.register_view(view)
+        views[key] = view
+
     def register_service(self):
-        self._hass.http.register_view(HavcsServiceView(self._hass))
+        self._register_view('service', HavcsServiceView(self._hass))
 
     def register_auth_authorize(self):
-        self._hass.http.register_view(HavcsAuthorizeView(self._hass, self._ha_url))
+        self._register_view('authorize', HavcsAuthorizeView(self._hass, self._ha_url))
 
     def register_auth_token(self):
-        self._hass.http.register_view(HavcsTokenView(self._hass, self._ha_url, self._expiration))
+        self._register_view('token', HavcsTokenView(self._hass, self._ha_url, self._expiration))
 
     def register_deivce_manager(self):
-        self._hass.http.register_view(HavcsDeviceView(self._hass, self._device_schema))
+        self._register_view('device', HavcsDeviceView(self._hass, self._device_schema))
 
     def register_settings_manager(self):
-        self._hass.http.register_view(HavcsSettingsView(self._hass,self._settings_schema))
+        self._register_view('settings', HavcsSettingsView(self._hass, self._settings_schema))
 
     async def async_check_http_oauth(self, triggered=None):
         _LOGGER.debug("[%s] check accessibility from local, base_url = %s", LOGGER_NAME, self._ha_url)
