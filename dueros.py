@@ -402,9 +402,24 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
         properties = []
         for device_property in device_properties:
             name = self.device_attribute_map_h2p.get(device_property.get('attribute'))
-            state = self._hass.states.get(device_property.get('entity_id'))
+            entity_id = device_property.get('entity_id')
+            attribute = device_property.get('attribute')
+            state = self._hass.states.get(entity_id)
             if name:
                 value = state.state if state else 'unavailable'
+                # HA climate and humidifier entities expose measured/target
+                # values as attributes rather than as their primary state.
+                if state and entity_id.startswith('climate.'):
+                    if attribute == 'temperature':
+                        value = state.attributes.get('current_temperature', 'unavailable')
+                    elif attribute == 'targettemperature':
+                        value = state.attributes.get('temperature', 'unavailable')
+                elif state and entity_id.startswith('humidifier.'):
+                    if attribute == 'humidity':
+                        value = state.attributes.get('current_humidity', 'unavailable')
+                    elif attribute == 'targethumidity':
+                        value = state.attributes.get('humidity', 'unavailable')
+
                 if name in ('temperatureReading', 'targetTemperature'):
                     scale = 'CELSIUS'
                     legalValue = 'DOUBLE'
@@ -423,9 +438,9 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
                 elif name == 'pm10':
                     scale = 'μg/m3'
                     legalValue = 'DOUBLE'
-                elif name == 'co2':
+                elif name == 'ppm':
                     scale = 'ppm'
-                    legalValue = 'DOUBLE'
+                    legalValue = 'INTEGER'
                 elif name == 'hcho':
                     scale = 'mg/m³'
                     legalValue = 'DOUBLE'
@@ -436,7 +451,7 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
                         value = 'ON'
                     scale = ''
                     legalValue = '(ON, OFF)'                
-                elif name == 'havc_mode':
+                elif name == 'havcmode':
                     scale = ''
                     legalValue = '("off", "heat_cool", "cool", "heat", "fan_only", "dry")'
                 elif name == 'mode':
