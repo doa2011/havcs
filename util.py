@@ -95,21 +95,46 @@ def get_token_from_command(command):
     return result.group(1) if result else None
 
 def update_token_expiration(access_token, hass, expiration):
+    """Update a HAVCS OAuth token's expiry, guarded for HA auth API changes."""
     try:
         if version.parse(jwt.__version__) < version.parse("2.0.0"):
             unverif_claims = jwt.decode(access_token, verify=False)
         else:
             unverif_claims = jwt.decode(
-                access_token, algorithms=["HS256"], options={"verify_signature": False}
+                access_token,
+                algorithms=["HS256"],
+                options={"verify_signature": False},
             )
-        refresh_token = hass.auth.async_get_refresh_token(cast(str, unverif_claims.get('iss')))
-        for user in hass.auth._store._users.values():
-            if refresh_token.id in user.refresh_tokens and refresh_token.access_token_expiration != expiration:
-                _LOGGER.debug("[util] set new access token expiration for refresh_token[%s]", refresh_token.id)
-                refresh_token.access_token_expiration = expiration
-                user.refresh_tokens[refresh_token.id] = refresh_token
-                hass.auth._store._async_schedule_save()
-                return True
+
+        token_id = unverif_claims.get("iss")
+        if not token_id:
+            _LOGGER.debug("[util] access token has no refresh-token issuer claim")
+            return False
+
+        # Use Home Assistant's public lookup API instead of reaching into
+        # AuthStore._users. Persisting an in-place expiry change still requires
+        # the private save hook, so guard that dependency explicitly.
+        refresh_token = hass.auth.async_get_refresh_token(cast(str, token_id))
+        if refresh_token is None:
+            _LOGGER.debug("[util] refresh token was not found")
+            return False
+
+        auth_store = getattr(hass.auth, "_store", None)
+        schedule_save = getattr(auth_store, "_async_schedule_save", None)
+        if not callable(schedule_save):
+            _LOGGER.warning(
+                "[util] cannot persist custom OAuth expiry: Home Assistant auth store API changed"
+            )
+            return False
+
+        if refresh_token.access_token_expiration != expiration:
+            refresh_token.access_token_expiration = expiration
+            schedule_save()
+            _LOGGER.debug(
+                "[util] updated access token expiry for refresh_token[%s]",
+                refresh_token.id,
+            )
+        return True
     except jwt.InvalidTokenError:
         _LOGGER.debug("[util] access token is invalid, reauthorization may be required")
         return False
