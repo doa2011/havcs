@@ -100,6 +100,8 @@ class HavcsAuthorizeView(HomeAssistantView):
     async def post(self, request):
         if INTEGRATION not in self._hass.data:
             return web.Response(status=503)
+        if not self._hass.data[INTEGRATION].get(DATA_HAVCS_CONFIG, {}).get('http'):
+            return web.Response(status=404)
         remote_addr = request.get('ha_real_ip')
         login_attemp = self._login_attempts.setdefault(remote_addr, {'count': 0, 'first_time': None, 'last_time': datetime.now()})
         req = await request.post()
@@ -345,7 +347,7 @@ class HavcsSettingsView(HomeAssistantView):
                     _LOGGER.error("[%s][device] fail to validate settings : %s", LOGGER_NAME, msg)
                     return self.json({ 'code': 'error', 'Msg': msg})
                 except Exception as e:
-                    _LOGGER.error("[%s][device] fail to update settings (%s) : %s", LOGGER_NAME, settings, traceback.format_exc())
+                    _LOGGER.error("[%s][device] fail to update settings: %s", LOGGER_NAME, traceback.format_exc())
                     return self.json({ 'code': 'error', 'Msg': repr(e)})      
         elif action == 'get':
             settings = self._hass.data[INTEGRATION][DATA_HAVCS_SETTINGS]
