@@ -220,13 +220,21 @@ class HavcsTokenView(HomeAssistantView):
 
         # self._platform_uri = data.get('redirect_uri')
         # data['redirect_uri'] = self._havcs_token_url
+        if not isinstance(data, dict):
+            return web.Response(body='400 ?(￣△￣?) 请求格式错误 (?￣△￣)?', status=400)
+
         grant_type = data.get('grant_type')
         redirect_uri = data.get('redirect_uri')
         client_id = data.get('client_id')
         client_secret = data.get('client_secret')
-        if not all((grant_type, client_id, client_secret)):
+        if not all(
+            isinstance(value, str) and value
+            for value in (grant_type, client_id, client_secret)
+        ):
             _LOGGER.warning("[%s][auth] Invalid token request: required fields are missing", LOGGER_NAME)
             return web.Response(body='400 ?(￣△￣?) 参数不全拒绝访问 (?￣△￣)?', status=400)
+        if redirect_uri is not None and not isinstance(redirect_uri, str):
+            return web.Response(body='400 ?(￣△￣?) redirect_uri 格式错误 (?￣△￣)?', status=400)
         validation = False
         if redirect_uri:
             parts = urlparse(redirect_uri)
