@@ -209,8 +209,9 @@ async def async_setup_entry(hass, config_entry):
     _LOGGER.debug(config_entry.source)
     
     local = hass.config.path("custom_components/" + INTEGRATION + "/html")
-    if os.path.isdir(local):
+    if os.path.isdir(local) and not hass.data.get('_havcs_static_path_registered'):
         await hass.http.async_register_static_paths([StaticPathConfig('/havcs', local, False)])
+        hass.data['_havcs_static_path_registered'] = True
     panels = hass.data.setdefault(DATA_PANELS, {})
     frontend_url_path = INTEGRATION+'_panel'
     if frontend_url_path not in panels:
@@ -462,8 +463,12 @@ async def async_unload_entry(hass, config_entry):
         if unload_ok:
             hass.services.async_remove(DOMAIN, SERVICE_RELOAD)
             hass.services.async_remove(DOMAIN, SERVICE_DEBUG_DISCOVERY)
-            if DATA_HAVCS_BIND_MANAGER in hass.data[DOMAIN]:
-                hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER].clear()
+            bind_manager = hass.data[DOMAIN].pop(DATA_HAVCS_BIND_MANAGER, None)
+            if bind_manager is not None:
+                bind_manager.clear()
+            http_manager = hass.data[DOMAIN].get(DATA_HAVCS_HTTP_MANAGER)
+            if http_manager is not None:
+                http_manager.async_unload()
             hass.data[DOMAIN].pop(DATA_HAVCS_CONFIG)
             # hass.data[DOMAIN].pop(DATA_HAVCS_ITEMS)
             hass.data[DOMAIN].pop(DATA_HAVCS_HANDLER)
