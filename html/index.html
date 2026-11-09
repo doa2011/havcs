@@ -379,14 +379,9 @@
             <div class="weui-cell">
                 <div class="weui-cell__hd"><label class="weui-label"><div class="required">entity_id</div><div>（选择HA实体，可多选）</div></label></div>
                 <div class="weui-cell__bd weui-cell_primary">
-                    <select class="weui-select" v-model="entityDomainFilter" style="margin-bottom:8px">
-                        <option value="all">全部实体类型</option>
-                        <option v-for="domain in entityDomains" :key="domain" :value="domain">{{ domain }}</option>
-                    </select>
-                    <select id="entity_id" class="weui-select" multiple size="7" v-model="selectedEntityIds" @change="syncEntityIds" style="height:auto;min-height:150px;border:1px solid #ddd;padding:6px">
-                        <option v-for="item in entityStates" :key="item.entity_id" :value="item.entity_id" v-if="entityDomainFilter === 'all' || item.entity_id.split('.')[0] === entityDomainFilter">{{ (item.attributes && item.attributes.friendly_name ? item.attributes.friendly_name + ' — ' : '') + item.entity_id }}</option>
-                    </select>
-                    <div style="font-size:12px;color:#888;margin-top:6px">列表来自 Home Assistant 当前已加载的实体；可按实体域过滤，支持多选。已选 {{ selectedEntityIds.length }} 个实体。</div>
+                    <input id="entityDomainFilter" class="weui-input" type="text" placeholder="筛选实体类型（默认全部）" readonly style="margin-bottom:8px"/>
+                    <input id="entity_id" class="weui-input" type="text" placeholder="点击选择 HA 实体（支持多选）" readonly/>
+                    <div style="font-size:12px;color:#888;margin-top:6px">点击选择器可按统一弹窗方式多选实体；可先按实体类型筛选。已选 {{ selectedEntityIds.length }} 个实体。</div>
                 </div>
             </div>
             <div class="weui-cell">
