@@ -43,6 +43,8 @@ class HavcsServiceView(HomeAssistantView):
         """Update state of entity."""
         if INTEGRATION not in self._hass.data:
             return web.Response(status=503)
+        if not self._hass.data[INTEGRATION].get(DATA_HAVCS_CONFIG, {}).get('http'):
+            return web.Response(status=404)
         try:
             start_time = datetime.now()
             _LOGGER.debug("[%s] -------- start handle task from http at %s --------", LOGGER_NAME, start_time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -87,8 +89,9 @@ class HavcsAuthorizeView(HomeAssistantView):
     async def get(self, request):
         if INTEGRATION not in self._hass.data:
             return web.Response(status=503)
+        http_config = self._hass.data[INTEGRATION].get(DATA_HAVCS_CONFIG, {}).get('http') or {}
         client_id = request.query.get('client_id')
-        if client_id in self._hass.data[INTEGRATION][DATA_HAVCS_CONFIG].get('http', {}).get('clients', {}).keys():
+        if client_id in http_config.get('clients', {}).keys():
             with open(self._hass.config.path("custom_components/" + INTEGRATION + "/html/login.html"), mode="r", encoding='UTF-8') as f:
                 body = f.read()
             return web.Response(body=body, content_type='text/html')
@@ -201,6 +204,8 @@ class HavcsTokenView(HomeAssistantView):
     async def post(self, request):
         if INTEGRATION not in self._hass.data:
             return web.Response(status=503)
+        if not self._hass.data[INTEGRATION].get(DATA_HAVCS_CONFIG, {}).get('http'):
+            return web.Response(status=404)
         body_data = await request.text()
         try:
             data = json.loads(body_data)
