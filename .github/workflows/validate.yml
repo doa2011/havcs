@@ -41,4 +41,5 @@ jobs:
         run: |
           mkdir -p /tmp/ha-config/custom_components
           cp -a . /tmp/ha-config/custom_components/havcs
+          cd /tmp
           PYTHONPATH=/tmp/ha-config python -c "import custom_components.havcs; import custom_components.havcs.http; import custom_components.havcs.bind; import custom_components.havcs.dueros"
