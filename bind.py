@@ -22,9 +22,6 @@ STORAGE_VERSION
 
 # 用于管理哪些平台哪些用户有哪些设备
 class HavcsBindManager:
-    _privious_upload_devices = {}
-    _new_upload_devices = {}
-    _discovery = set()
     def __init__(self, hass, platforms, bind_device = False, sync_device = False, app_key = None, decrypt_key = None, direct_report = False):
         _LOGGER.debug("[bindManager] ----init bindManager----")
         # 兼容不同版本HA的Store签名：新版需要hass参数，旧版不需要
@@ -33,8 +30,10 @@ class HavcsBindManager:
         except TypeError:
             self._store = Store(STORAGE_VERSION, STORAGE_KEY)
         self._platforms = platforms
-        for platform in platforms:
-            self._new_upload_devices[platform] = {}
+        # Keep mutable synchronization state isolated per manager instance.
+        self._privious_upload_devices = {}
+        self._new_upload_devices = {platform: {} for platform in platforms}
+        self._discovery = set()
         self._hass = hass
         self._sync_manager = {
             'bind_device': bind_device,
@@ -44,13 +43,16 @@ class HavcsBindManager:
             'direct_report': direct_report
         }
         self._pending_retries = set()
+        self._retry_callbacks = {}
     async def async_init(self):
         await self.async_load()
         if self._sync_manager.get('sync_device'):
             self.sync_device()
         if self._sync_manager.get('direct_report'):
             # 启动30秒后全量上报一次，此后每30分钟对账一次
-            async_call_later(self._hass, 30, self._make_full_report_job('startup'))
+            self._sync_manager['remove_startup_report'] = async_call_later(
+                self._hass, 30, self._make_full_report_job('startup')
+            )
             # 新旧版本HA的参数顺序不同（新版hass,action,interval；旧版hass,interval,action），关键字传参兼容两者
             self._sync_manager['remove_interval_listener'] = async_track_time_interval(
                 self._hass, action=self._make_full_report_job('periodic'), interval=timedelta(minutes=30))
@@ -203,10 +205,15 @@ class HavcsBindManager:
         if remove_listener:
             remove_listener()
             self._sync_manager.pop('remove_listener')
-        remove_interval_listener = self._sync_manager.get('remove_interval_listener')
-        if remove_interval_listener:
-            remove_interval_listener()
-            self._sync_manager.pop('remove_interval_listener')
+        for key in ('remove_interval_listener', 'remove_startup_report'):
+            remove_callback = self._sync_manager.pop(key, None)
+            if remove_callback:
+                remove_callback()
+
+        for remove_callback in self._retry_callbacks.values():
+            remove_callback()
+        self._retry_callbacks.clear()
+        self._pending_retries.clear()
 
     @property
     def direct_report(self):
@@ -247,9 +254,12 @@ class HavcsBindManager:
                     status = None
                 if status == 21207 and (platform, device_id) not in self._pending_retries:
                     # 同一属性60秒限频，安排延迟重试保证最终状态同步
-                    self._pending_retries.add((platform, device_id))
+                    retry_key = (platform, device_id)
+                    self._pending_retries.add(retry_key)
                     _LOGGER.info("[skill] report rate-limited, retry in 61s: device_id = %s", device_id)
-                    async_call_later(self._hass, 61, self._make_direct_report_retry(platform, handler, device_id))
+                    self._retry_callbacks[retry_key] = async_call_later(
+                        self._hass, 61, self._make_direct_report_retry(platform, handler, device_id)
+                    )
             except(asyncio.TimeoutError, aiohttp.ClientError):
                 _LOGGER.error("[skill] fail to access %s, report device fail: timeout", DUEROS_CHANGEREPORT_URL)
             except:
@@ -257,7 +267,9 @@ class HavcsBindManager:
 
     def _make_direct_report_retry(self, platform, handler, device_id):
         async def _retry(now):
-            self._pending_retries.discard((platform, device_id))
+            retry_key = (platform, device_id)
+            self._pending_retries.discard(retry_key)
+            self._retry_callbacks.pop(retry_key, None)
             try:
                 await self.async_send_direct_report(platform, handler, device_id)
             except:
