@@ -1,0 +1,64 @@
+name: Sync compressed web assets
+
+on:
+  push:
+    branches:
+      - feature/personal-stable-ha-2026.11
+    paths:
+      - "html/js/**/*.js"
+      - "html/css/**/*.css"
+      - ".github/workflows/sync-compressed-assets.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-compressed-assets-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compress:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Regenerate gzip assets
+        run: |
+          python3 - <<'PY'
+          import gzip
+          from pathlib import Path
+
+          roots = (Path("html/js"), Path("html/css"))
+          count = 0
+          for root in roots:
+              if not root.exists():
+                  continue
+              for source in root.rglob("*"):
+                  if not source.is_file() or source.suffix not in {".js", ".css"}:
+                      continue
+                  target = Path(str(source) + ".gz")
+                  compressed = gzip.compress(source.read_bytes(), compresslevel=9, mtime=0)
+                  target.write_bytes(compressed)
+                  with gzip.open(target, "rb") as stream:
+                      if stream.read() != source.read_bytes():
+                          raise RuntimeError(f"gzip verification failed: {target}")
+                  count += 1
+          print(f"Verified {count} compressed assets")
+          PY
+
+      - name: Commit updated gzip files
+        run: |
+          if [ -z "$(git status --porcelain -- 'html/js' 'html/css')" ]; then
+            echo "All gzip assets are already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add html/js html/css
+          git commit -m "chore: sync gzip web assets"
+          git push origin "HEAD:${{ github.ref_name }}"
