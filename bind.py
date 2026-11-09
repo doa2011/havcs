@@ -243,7 +243,7 @@ class HavcsBindManager:
             return
         for report in payload:
             try:
-                session = async_get_clientsession(self._hass, verify_ssl=False)
+                session = async_get_clientsession(self._hass)
                 with async_timeout.timeout(5):
                     response = await session.post(DUEROS_CHANGEREPORT_URL, json=report)
                     text = await response.text()
