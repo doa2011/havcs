@@ -71,6 +71,19 @@ class HA {
         return this.post(url, params)
     }
 
+    // 获取Home Assistant当前已加载的实体列表（需要当前面板用户的API权限）
+    async states() {
+        let authorization = await this.getAuthorization()
+        let response = await fetch('/api/states', {
+            method: 'get',
+            headers: { 'Authorization': authorization }
+        })
+        if (!response.ok) {
+            throw new Error('failed to load Home Assistant states: ' + response.status)
+        }
+        return response.json()
+    }
+
     // 调用Home Assistant原生服务，如 switch/turn_on
     async callService(domain, service, data) {
         let authorization = await this.getAuthorization()

@@ -5,6 +5,9 @@ recommended version HA version: 0.114.4
 """
 
 import asyncio
+import gzip
+import zlib
+from pathlib import Path
 from datetime import datetime, timedelta
 import importlib
 import voluptuous as vol
@@ -194,6 +197,46 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             ))
     return True
 
+
+def _sync_precompressed_assets(static_dir: str) -> int:
+    """Regenerate stale or invalid .gz assets from their source files.
+
+    Home Assistant may serve a sibling .gz file when the client advertises
+    gzip support. Keeping these files in sync prevents browsers from receiving
+    an older JavaScript/CSS build than the uncompressed file on disk.
+    """
+    root = Path(static_dir)
+    repaired = 0
+    for compressed_path in root.rglob("*.gz"):
+        source_path = Path(str(compressed_path)[:-3])
+        if not source_path.is_file():
+            continue
+
+        source_data = source_path.read_bytes()
+        try:
+            compressed_data = compressed_path.read_bytes()
+            is_current = gzip.decompress(compressed_data) == source_data
+        except (OSError, EOFError, gzip.BadGzipFile, zlib.error):
+            is_current = False
+
+        if is_current:
+            continue
+
+        # Write atomically so an HTTP request never observes a partial archive.
+        temporary_path = compressed_path.with_name(compressed_path.name + ".tmp")
+        temporary_path.write_bytes(gzip.compress(source_data, mtime=0))
+        temporary_path.replace(compressed_path)
+        repaired += 1
+        _LOGGER.warning(
+            "[init] regenerated stale precompressed asset: %s",
+            compressed_path.relative_to(root),
+        )
+
+    if repaired:
+        _LOGGER.info("[init] synchronized %s precompressed HAVCS assets", repaired)
+    return repaired
+
+
 async def async_setup_entry(hass, config_entry):
     """Load a config entry."""
     
@@ -204,13 +247,16 @@ async def async_setup_entry(hass, config_entry):
     hass.data[DOMAIN].setdefault(DATA_HAVCS_SETTINGS, {})
     conf = hass.data[DOMAIN].get(DATA_HAVCS_CONFIG)
     
-    _LOGGER.debug(conf)
+    _LOGGER.debug("[init] loading HAVCS configuration")
     
     _LOGGER.debug(config_entry.source)
     
     local = hass.config.path("custom_components/" + INTEGRATION + "/html")
     if os.path.isdir(local):
+        _sync_precompressed_assets(local)
+    if os.path.isdir(local) and not hass.data.get('_havcs_static_path_registered'):
         await hass.http.async_register_static_paths([StaticPathConfig('/havcs', local, False)])
+        hass.data['_havcs_static_path_registered'] = True
     panels = hass.data.setdefault(DATA_PANELS, {})
     frontend_url_path = INTEGRATION+'_panel'
     if frontend_url_path not in panels:
@@ -250,8 +296,8 @@ async def async_setup_entry(hass, config_entry):
             conf = CONFIG_SCHEMA({DOMAIN: dict(config_entry.data)})[DOMAIN]
         elif any(key in conf for key in config_entry.data):
             _LOGGER.warning(
-                "[init] Data in your config entry is going to override your "
-                "configuration.yaml: %s", config_entry.data)
+                "[init] Data in your config entry is going to override matching "
+                "configuration.yaml options")
             for key in config_entry.data:
                 if key in conf:
                     if isinstance(conf[key], dict):
@@ -268,11 +314,21 @@ async def async_setup_entry(hass, config_entry):
                 conf.pop(CONF_SKILL)
             conf = CONFIG_SCHEMA({DOMAIN: conf})[DOMAIN]
 
-    http_manager = hass.data[DOMAIN][DATA_HAVCS_HTTP_MANAGER] = HavcsHttpManager(hass, conf.get(CONF_HTTP, {}).get(CONF_HA_URL, get_url(hass)), DEVICE_CONFIG_SCHEMA, SETTINGS_CONFIG_SCHEMA)
+    http_conf = conf.get(CONF_HTTP)
+    if http_conf is None:
+        conf.pop(CONF_HTTP, None)
+        http_conf = {}
+
+    http_manager = hass.data[DOMAIN][DATA_HAVCS_HTTP_MANAGER] = HavcsHttpManager(
+        hass,
+        http_conf.get(CONF_HA_URL) or get_url(hass),
+        DEVICE_CONFIG_SCHEMA,
+        SETTINGS_CONFIG_SCHEMA,
+    )
     if CONF_HTTP in conf:
-        if conf.get(CONF_HTTP) is None:
-            conf[CONF_HTTP] = HTTP_SCHEMA({})
-        http_manager.set_expiration(timedelta(hours=conf.get(CONF_HTTP).get(CONF_EXPIRE_IN_HOURS, DEFAULT_EXPIRE_IN_HOURS)))
+        http_manager.set_expiration(
+            timedelta(hours=http_conf.get(CONF_EXPIRE_IN_HOURS, DEFAULT_EXPIRE_IN_HOURS))
+        )
         http_manager.register_auth_authorize()
         http_manager.register_auth_token()
         http_manager.register_service()
@@ -284,8 +340,9 @@ async def async_setup_entry(hass, config_entry):
     if CONF_SKILL in conf:
         _LOGGER.warning("[init] skill模式依赖的ljr.im中转服务已停止，忽略该配置，仅按http直连模式运行")
     
-    havcs_util.ENTITY_KEY = conf.get(CONF_SETTING, {}).get(CONF_ENTITY_KEY)
-    havcs_util.CONTEXT_HAVCS = Context(conf.get(CONF_SETTING, {}).get(CONF_USER_ID))
+    settings_conf = conf.get(CONF_SETTING) or {}
+    havcs_util.ENTITY_KEY = settings_conf.get(CONF_ENTITY_KEY)
+    havcs_util.CONTEXT_HAVCS = Context(settings_conf.get(CONF_USER_ID))
 
     platforms = conf.get(CONF_PLATFORM)
 
@@ -442,12 +499,16 @@ async def async_setup_entry(hass, config_entry):
         await hass.services.async_call(DOMAIN, SERVICE_RELOAD)
 
         if CONF_HTTP in conf:
-            hass.async_create_task(http_manager.async_check_http_oauth())
+            hass.data[DOMAIN]['oauth_check_task'] = hass.async_create_task(
+                http_manager.async_check_http_oauth()
+            )
 
     if config_entry.source == config_entries.SOURCE_IMPORT:
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, start_havcs)
+        hass.data[DOMAIN]['remove_start_listener'] = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_START, start_havcs
+        )
     elif config_entry.source == config_entries.SOURCE_USER:
-        hass.async_create_task(start_havcs(None))
+        hass.data[DOMAIN]['startup_task'] = hass.async_create_task(start_havcs(None))
 
     _LOGGER.info("[init] havcs initialization finished.")
     return True
@@ -460,16 +521,34 @@ async def async_unload_entry(hass, config_entry):
         else:
             unload_ok =True
         if unload_ok:
+            remove_start_listener = hass.data[DOMAIN].pop('remove_start_listener', None)
+            if remove_start_listener is not None:
+                remove_start_listener()
+
+            tasks_to_cancel = []
+            for task_key in ('startup_task', 'oauth_check_task'):
+                task = hass.data[DOMAIN].pop(task_key, None)
+                if task is not None and not task.done():
+                    task.cancel()
+                    tasks_to_cancel.append(task)
+            if tasks_to_cancel:
+                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
             hass.services.async_remove(DOMAIN, SERVICE_RELOAD)
             hass.services.async_remove(DOMAIN, SERVICE_DEBUG_DISCOVERY)
-            if DATA_HAVCS_BIND_MANAGER in hass.data[DOMAIN]:
-                hass.data[DOMAIN][DATA_HAVCS_BIND_MANAGER].clear()
-            hass.data[DOMAIN].pop(DATA_HAVCS_CONFIG)
-            # hass.data[DOMAIN].pop(DATA_HAVCS_ITEMS)
-            hass.data[DOMAIN].pop(DATA_HAVCS_HANDLER)
-            hass.data[DOMAIN].pop(DATA_HAVCS_HTTP_MANAGER)
-            hass.data[DOMAIN].pop(CONF_DEVICE_CONFIG_PATH)
-            hass.data[DOMAIN].pop(CONF_SETTINGS_CONFIG_PATH)
+            bind_manager = hass.data[DOMAIN].pop(DATA_HAVCS_BIND_MANAGER, None)
+            if bind_manager is not None:
+                bind_manager.clear()
+            http_manager = hass.data[DOMAIN].get(DATA_HAVCS_HTTP_MANAGER)
+            if http_manager is not None:
+                http_manager.async_unload()
+            hass.data[DOMAIN].pop(DATA_HAVCS_CONFIG, None)
+            hass.data[DOMAIN].pop(DATA_HAVCS_ITEMS, None)
+            hass.data[DOMAIN].pop(DATA_HAVCS_SETTINGS, None)
+            hass.data[DOMAIN].pop(DATA_HAVCS_HANDLER, None)
+            hass.data[DOMAIN].pop(DATA_HAVCS_HTTP_MANAGER, None)
+            hass.data[DOMAIN].pop(CONF_DEVICE_CONFIG_PATH, None)
+            hass.data[DOMAIN].pop(CONF_SETTINGS_CONFIG_PATH, None)
             frontend.async_remove_panel(DOMAIN+'_panel')
             if not hass.data[DOMAIN]:
                 hass.data.pop(DOMAIN)

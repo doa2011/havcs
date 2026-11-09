@@ -11,10 +11,12 @@ from homeassistant.helpers import device_registry
 
 from .const import DATA_HAVCS_SETTINGS, INTEGRATION, DATA_HAVCS_ITEMS, ATTR_DEVICE_VISABLE, ATTR_DEVICE_ID, ATTR_DEVICE_ENTITY_ID, ATTR_DEVICE_TYPE, ATTR_DEVICE_NAME, ATTR_DEVICE_ZONE, ATTR_DEVICE_ATTRIBUTES, ATTR_DEVICE_ACTIONS, ATTR_DEVICE_PROPERTIES
 from .device import VoiceControllDevice
+from .parsers import parse_custom_action_data as _parse_custom_action_data
 
 
 _LOGGER = logging.getLogger(__name__)
 LOGGER_NAME = 'helper'
+
 
 DOMAIN_SERVICE_WITHOUT_ENTITY_ID = []
 DOMAIN_SERVICE_WITH_ENTITY_ID = ['common_timer','climate']
@@ -97,7 +99,16 @@ class VoiceControlProcessor:
         if device.custom_actions.get(ha_action):
             domain_list = [cmnd[0] for cmnd in device.custom_actions[ha_action]]
             service_list = [cmnd[1] for cmnd in device.custom_actions[ha_action]]
-            data_list = [eval(cmnd[2]) for cmnd in device.custom_actions[ha_action]]
+            try:
+                data_list = [_parse_custom_action_data(cmnd[2]) for cmnd in device.custom_actions[ha_action]]
+            except (ValueError, SyntaxError, TypeError) as err:
+                _LOGGER.error(
+                    "[%s] invalid custom action data for device %s: %s",
+                    LOGGER_NAME,
+                    device.device_id,
+                    err,
+                )
+                return self._errorResult('INVALIDATE_PARAMS'), None
             _LOGGER.debug("[%s] prepared domain_list: %s", LOGGER_NAME, domain_list)
             _LOGGER.debug("[%s] prepared service_list: %s", LOGGER_NAME, service_list)
             _LOGGER.debug("[%s] prepared data_list: %s", LOGGER_NAME, data_list)
@@ -181,11 +192,11 @@ class VoiceControlProcessor:
     def process_query_command(self, command) -> tuple:
         device_id = self._prase_command(command, 'device_id')
         device_id = self._decrypt_device_id(device_id)
-        if device_id is None:
+        device = self.vcdm.get(device_id) if device_id is not None else None
+        if device is None:
             return self._errorResult('DEVICE_IS_NOT_EXIST'), None
         action = self._prase_command(command, 'action')
-        device_properties = self.vcdm.get(device_id).properties
-        properties = self._query_process_propertites(device_properties, action)
+        properties = self._query_process_propertites(device.properties, action)
         _LOGGER.debug(properties)
         return (None, properties) if properties else (self._errorResult('IOT_DEVICE_OFFLINE'), None)
 
