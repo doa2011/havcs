@@ -45,13 +45,11 @@ class HavcsServiceView(HomeAssistantView):
             start_time = datetime.now()
             _LOGGER.debug("[%s] -------- start handle task from http at %s --------", LOGGER_NAME, start_time.strftime('%Y-%m-%d %H:%M:%S'))
             data = await request.text()
-            _LOGGER.debug("[%s] raw message: %s", LOGGER_NAME, data)
             platform = havcs_util.get_platform_from_command(data)
             auth_value = havcs_util.get_token_from_command(data)
-            _LOGGER.debug("[%s] get access_token >>> %s <<<", LOGGER_NAME, auth_value)
             refresh_token = self._hass.auth.async_validate_access_token(auth_value)
             if refresh_token:
-                _LOGGER.debug("[%s] validate access_token, get refresh_token(id = %s)", LOGGER_NAME, refresh_token.id)
+                _LOGGER.debug("[%s] access token validated", LOGGER_NAME)
             else:
                 _LOGGER.debug("[%s] validate access_token, get None", LOGGER_NAME)
                 _LOGGER.debug("[%s] !!! token校验失败，请检查授权 !!!", LOGGER_NAME)
@@ -100,7 +98,6 @@ class HavcsAuthorizeView(HomeAssistantView):
             return web.Response(body='400 ?(￣△￣?) 参数不全拒绝访问 (?￣△￣)?', status=400)
         parts = urlparse(redirect_uri)
         if not any([client_id.startswith(platform) and parts.scheme + '://' + parts.netloc == CLIENT_PALTFORM_DICT[platform] for platform in CLIENT_PALTFORM_DICT.keys()]):
-            _LOGGER.debug(platform)
             return web.Response(body='400 ?(￣△￣?) 参数不全拒绝访问 (?￣△￣)?', status=400)
         if datetime.now() - login_attemp['last_time'] > timedelta(minutes=1):
             login_attemp['count'] = 0
@@ -117,12 +114,12 @@ class HavcsAuthorizeView(HomeAssistantView):
             "type": "authorize"
         }
         try:
-            session = async_get_clientsession(self._hass, verify_ssl=False)
+            session = async_get_clientsession(self._hass)
             if not self._flow_id:
                 async with async_timeout.timeout(5):
                     response = await session.post(self._ha_url+'/auth/login_flow', json=data)
                 result = await response.json()
-                _LOGGER.debug(result)
+                _LOGGER.debug("[%s][auth] HA login flow initialized: status=%s", LOGGER_NAME, response.status)
                 self._flow_id = result.get('flow_id')
             if self._flow_id:
                 data = {
@@ -134,7 +131,7 @@ class HavcsAuthorizeView(HomeAssistantView):
                 async with async_timeout.timeout(5):
                     response = await session.post(self._ha_url+'/auth/login_flow/'+self._flow_id, json=data)
                 result = await response.json()
-                _LOGGER.debug(result)
+                _LOGGER.debug("[%s][auth] HA login flow response received: status=%s", LOGGER_NAME, response.status)
                 code = result.get('result')
                 if code:
                     self._flow_id = None
@@ -147,7 +144,6 @@ class HavcsAuthorizeView(HomeAssistantView):
                         data.update({'state': state})
                     query_string = urlencode(data)
                     redirect_uri = parts.scheme + '://' + parts.netloc + parts.path +'?' + query_string + '&' + parts.query
-                    _LOGGER.debug(redirect_uri)
                     _LOGGER.debug("[%s][auth] redirect_uri = %s", LOGGER_NAME, redirect_uri)
                     return self.json({ 'code': 'ok', 'Msg': '成功授权', 'data': {'location': redirect_uri}})
 
@@ -185,15 +181,11 @@ class HavcsTokenView(HomeAssistantView):
         return web.Response(body='404 (￣ε￣) 访问到空气页面 (￣з￣)', status=404)
 
     async def post(self, request):
-        headers = request.headers
-        _LOGGER.debug("[%s][auth] request headers : %s", LOGGER_NAME, headers)
         body_data = await request.text()
-        _LOGGER.debug("[%s][auth] request data : %s", LOGGER_NAME, body_data)
         try:
             data = json.loads(body_data)
         except json.decoder.JSONDecodeError:
             query_string = body_data if body_data else request.query_string
-            _LOGGER.debug("[%s][auth] request query : %s", LOGGER_NAME, query_string)
             data = { k:v[0] for k, v in parse.parse_qs(query_string).items() }
         except:
             _LOGGER.error("[%s][auth] handle request : %s", LOGGER_NAME, traceback.format_exc() )
@@ -205,8 +197,8 @@ class HavcsTokenView(HomeAssistantView):
         client_id = data.get('client_id')
         client_secret = data.get('client_secret')
         if not all((grant_type, client_id, client_secret)):
-            _LOGGER.error("[%s][auth] Invalid request: data = %s", LOGGER_NAME, data)
-            web.Response(body='400 ?(￣△￣?) 参数不全拒绝访问 (?￣△￣)?', status=400)
+            _LOGGER.warning("[%s][auth] Invalid token request: required fields are missing", LOGGER_NAME)
+            return web.Response(body='400 ?(￣△￣?) 参数不全拒绝访问 (?￣△￣)?', status=400)
         validation = False
         if redirect_uri:
             parts = urlparse(redirect_uri)
@@ -223,11 +215,10 @@ class HavcsTokenView(HomeAssistantView):
                     _LOGGER.debug(platform)
                     _LOGGER.debug(data['client_id'])
         if not validation:
-            _LOGGER.error("[%s][auth] Invalid client(client_id = %s, client_secret = %s): client_id or client_secret wrong", LOGGER_NAME, client_id, client_secret)
-            web.Response(body='401 Σ( ° △ °|||) 验证失败拒绝访问', status=401)
-        _LOGGER.debug("[%s][auth] forward request: data = %s", LOGGER_NAME, data)
+            _LOGGER.warning("[%s][auth] Invalid OAuth client: client_id=%s", LOGGER_NAME, client_id)
+            return web.Response(body='401 Σ( ° △ °|||) 验证失败拒绝访问', status=401)
         try:
-            session = async_get_clientsession(self._hass, verify_ssl=False)
+            session = async_get_clientsession(self._hass)
             async with async_timeout.timeout(5):
                 response = await session.post(self._token_url, data=data)
         except(asyncio.TimeoutError, aiohttp.ClientError):
@@ -240,15 +231,14 @@ class HavcsTokenView(HomeAssistantView):
         if grant_type == 'authorization_code':
             try:
                 result = await response.json()
-                _LOGGER.debug("expiration [%s],refresh_token:[%s]",result['expires_in'],result['refresh_token'])
+                _LOGGER.debug("[%s][auth] received authorization token response", LOGGER_NAME)
                 result['expires_in'] = int(self._expiration.total_seconds())
-                _LOGGER.debug("[%s][auth] get access token[%s] with default expiration [%s], try to update expiration param and get new access token through another refresh token request.", LOGGER_NAME, result.get('access_token'),result['expires_in'])
                 access_token = result.get('access_token')
                 havcs_util.update_token_expiration(access_token, self._hass, self._expiration)
 
                 try:
                     refresh_token_data = {'client_id': data.get('client_id'), 'grant_type': 'refresh_token', 'refresh_token': result.get('refresh_token')}
-                    session = async_get_clientsession(self._hass, verify_ssl=False)
+                    session = async_get_clientsession(self._hass)
                     async with async_timeout.timeout(5):
                         response = await session.post(self._token_url, data=refresh_token_data)
                 except(asyncio.TimeoutError, aiohttp.ClientError):
@@ -257,37 +247,36 @@ class HavcsTokenView(HomeAssistantView):
                 
                 try:
                     refresh_token_result = await response.json()
-                    _LOGGER.debug("[%s][auth] get new access token[%s] with new expiration.", LOGGER_NAME, refresh_token_result.get('access_token'))
                     result['access_token'] = refresh_token_result.get('access_token')
                     _LOGGER.debug("[%s][auth] success to deal %s request, return access token.", LOGGER_NAME, grant_type)
                     return self.json(result)
                 except:
                     result = await response.text()
-                    _LOGGER.error("[%s][auth] fail to get new access token, access %s in local network, get response: status = %s, data = %s", LOGGER_NAME, self._token_url, response.status, result)
+                    _LOGGER.error("[%s][auth] refresh after authorization failed: status=%s", LOGGER_NAME, response.status)
                     return web.Response(status=response.status)
             except:
                 result = await response.text()
                 _LOGGER.error("[%s][auth] %s", LOGGER_NAME, traceback.format_exc())
-                _LOGGER.error("[%s][auth] fail to get token from %s in local network, get response: status = %s, data = %s", LOGGER_NAME, self._token_url, response.status, result)
+                _LOGGER.error("[%s][auth] authorization token exchange failed: status=%s", LOGGER_NAME, response.status)
                 return web.Response(status=response.status)
         elif grant_type == 'refresh_token':
             try:
                 result = await response.json()
                 result['refresh_token'] = data.get('refresh_token')
-                _LOGGER.debug("[%s][auth] deal %s request, return refresh_token again: status = %s, data = %s", LOGGER_NAME, grant_type, response.status, result)
+                _LOGGER.debug("[%s][auth] refresh token request completed: status=%s", LOGGER_NAME, response.status)
                 return self.json(result)
             except:
                 result = await response.text()
-                _LOGGER.error("[%s][auth] fail to deal %s request, get response: status = %s, data = %s", LOGGER_NAME, grant_type, response.status, result)
+                _LOGGER.error("[%s][auth] refresh token request failed: status=%s", LOGGER_NAME, response.status)
                 return web.Response(status=response.status)
         else:
             try:
                 result = await response.json()
-                _LOGGER.debug("[%s][auth] success to deal %s request, get response: status = %s, data = %s", LOGGER_NAME, grant_type, response.status, result)
+                _LOGGER.debug("[%s][auth] OAuth request completed: grant_type=%s status=%s", LOGGER_NAME, grant_type, response.status)
                 return self.json(result)
             except:
                 result = await response.text()
-                _LOGGER.error("[%s][auth] fail to deal %s request, get response: status = %s, data = %s", LOGGER_NAME, grant_type, response.status, result)
+                _LOGGER.error("[%s][auth] OAuth request failed: grant_type=%s status=%s", LOGGER_NAME, grant_type, response.status)
                 return web.Response(status=response.status)
         # return web.Response( headers={'Location': self._auth_url+'?'+query_string}, status=303)
 
@@ -487,7 +476,7 @@ class HavcsHttpManager:
                 self._retry_remove()
                 self._retry_remove = None
 
-            session = async_get_clientsession(self._hass, verify_ssl=False)
+            session = async_get_clientsession(self._hass)
             async with async_timeout.timeout(5):
                 response = await session.get(self._ha_url + '/havcs/auth/authorize')
             if response.status == 401:
