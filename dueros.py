@@ -405,10 +405,7 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
             state = self._hass.states.get(device_property.get('entity_id'))
             if name:
                 value = state.state if state else 'unavailable'
-                if name == 'temperature':
-                    scale = 'CELSIUS'
-                    legalValue = 'DOUBLE'
-                if name == 'targettemperature':
+                if name in ('temperatureReading', 'targetTemperature'):
                     scale = 'CELSIUS'
                     legalValue = 'DOUBLE'
                 elif name == 'brightness':
@@ -519,7 +516,8 @@ class VoiceControlDueros(PlatformParameter, VoiceControlProcessor):
                     value = state.attributes.get("current_humidity", state.state) if state else None
                 if device_property.get('entity_id').startswith('humidifier.') and action == "TargetHumidity":
                     value = state.attributes.get("humidity", state.state) if state else None                
-                if value:
+                if value is not None and value not in ("unknown", "unavailable"):
+                    # Zero and False are valid device attribute values.
                     # if action == "Humidity" or action == "TargetHumidity":
                         # value = float(value)/100
                     if device_property.get('attribute').lower() in action.lower():
