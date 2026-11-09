@@ -269,11 +269,21 @@ async def async_setup_entry(hass, config_entry):
                 conf.pop(CONF_SKILL)
             conf = CONFIG_SCHEMA({DOMAIN: conf})[DOMAIN]
 
-    http_manager = hass.data[DOMAIN][DATA_HAVCS_HTTP_MANAGER] = HavcsHttpManager(hass, conf.get(CONF_HTTP, {}).get(CONF_HA_URL, get_url(hass)), DEVICE_CONFIG_SCHEMA, SETTINGS_CONFIG_SCHEMA)
+    http_conf = conf.get(CONF_HTTP)
+    if http_conf is None:
+        conf.pop(CONF_HTTP, None)
+        http_conf = {}
+
+    http_manager = hass.data[DOMAIN][DATA_HAVCS_HTTP_MANAGER] = HavcsHttpManager(
+        hass,
+        http_conf.get(CONF_HA_URL) or get_url(hass),
+        DEVICE_CONFIG_SCHEMA,
+        SETTINGS_CONFIG_SCHEMA,
+    )
     if CONF_HTTP in conf:
-        if conf.get(CONF_HTTP) is None:
-            conf[CONF_HTTP] = HTTP_SCHEMA({})
-        http_manager.set_expiration(timedelta(hours=conf.get(CONF_HTTP).get(CONF_EXPIRE_IN_HOURS, DEFAULT_EXPIRE_IN_HOURS)))
+        http_manager.set_expiration(
+            timedelta(hours=http_conf.get(CONF_EXPIRE_IN_HOURS, DEFAULT_EXPIRE_IN_HOURS))
+        )
         http_manager.register_auth_authorize()
         http_manager.register_auth_token()
         http_manager.register_service()
@@ -285,8 +295,9 @@ async def async_setup_entry(hass, config_entry):
     if CONF_SKILL in conf:
         _LOGGER.warning("[init] skill模式依赖的ljr.im中转服务已停止，忽略该配置，仅按http直连模式运行")
     
-    havcs_util.ENTITY_KEY = conf.get(CONF_SETTING, {}).get(CONF_ENTITY_KEY)
-    havcs_util.CONTEXT_HAVCS = Context(conf.get(CONF_SETTING, {}).get(CONF_USER_ID))
+    settings_conf = conf.get(CONF_SETTING) or {}
+    havcs_util.ENTITY_KEY = settings_conf.get(CONF_ENTITY_KEY)
+    havcs_util.CONTEXT_HAVCS = Context(settings_conf.get(CONF_USER_ID))
 
     platforms = conf.get(CONF_PLATFORM)
 
