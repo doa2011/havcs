@@ -41,6 +41,8 @@ class HavcsServiceView(HomeAssistantView):
 
     async def post(self, request):
         """Update state of entity."""
+        if INTEGRATION not in self._hass.data:
+            return web.Response(status=503)
         try:
             start_time = datetime.now()
             _LOGGER.debug("[%s] -------- start handle task from http at %s --------", LOGGER_NAME, start_time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -511,6 +513,12 @@ class HavcsHttpManager:
 
     def register_settings_manager(self):
         self._register_view('settings', HavcsSettingsView(self._hass, self._settings_schema))
+
+    def async_unload(self):
+        """Cancel retry callbacks owned by this manager."""
+        if self._retry_remove is not None:
+            self._retry_remove()
+            self._retry_remove = None
 
     async def async_check_http_oauth(self, triggered=None):
         _LOGGER.debug("[%s] check accessibility from local, base_url = %s", LOGGER_NAME, self._ha_url)
