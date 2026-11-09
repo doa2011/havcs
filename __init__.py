@@ -5,6 +5,8 @@ recommended version HA version: 0.114.4
 """
 
 import asyncio
+import gzip
+from pathlib import Path
 from datetime import datetime, timedelta
 import importlib
 import voluptuous as vol
@@ -194,6 +196,46 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             ))
     return True
 
+
+def _sync_precompressed_assets(static_dir: str) -> int:
+    """Regenerate stale or invalid .gz assets from their source files.
+
+    Home Assistant may serve a sibling .gz file when the client advertises
+    gzip support. Keeping these files in sync prevents browsers from receiving
+    an older JavaScript/CSS build than the uncompressed file on disk.
+    """
+    root = Path(static_dir)
+    repaired = 0
+    for compressed_path in root.rglob("*.gz"):
+        source_path = Path(str(compressed_path)[:-3])
+        if not source_path.is_file():
+            continue
+
+        source_data = source_path.read_bytes()
+        try:
+            compressed_data = compressed_path.read_bytes()
+            is_current = gzip.decompress(compressed_data) == source_data
+        except (OSError, EOFError, gzip.BadGzipFile):
+            is_current = False
+
+        if is_current:
+            continue
+
+        # Write atomically so an HTTP request never observes a partial archive.
+        temporary_path = compressed_path.with_name(compressed_path.name + ".tmp")
+        temporary_path.write_bytes(gzip.compress(source_data, mtime=0))
+        temporary_path.replace(compressed_path)
+        repaired += 1
+        _LOGGER.warning(
+            "[init] regenerated stale precompressed asset: %s",
+            compressed_path.relative_to(root),
+        )
+
+    if repaired:
+        _LOGGER.info("[init] synchronized %s precompressed HAVCS assets", repaired)
+    return repaired
+
+
 async def async_setup_entry(hass, config_entry):
     """Load a config entry."""
     
@@ -209,6 +251,8 @@ async def async_setup_entry(hass, config_entry):
     _LOGGER.debug(config_entry.source)
     
     local = hass.config.path("custom_components/" + INTEGRATION + "/html")
+    if os.path.isdir(local):
+        _sync_precompressed_assets(local)
     if os.path.isdir(local) and not hass.data.get('_havcs_static_path_registered'):
         await hass.http.async_register_static_paths([StaticPathConfig('/havcs', local, False)])
         hass.data['_havcs_static_path_registered'] = True
